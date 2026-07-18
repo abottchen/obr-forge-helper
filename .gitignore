@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.superpowers/
+.vite/
+.worktrees/
+*.log
+.DS_Store
+.idea/
+.vscode/
+.env
+.mcp.json
+.claude/settings.local.json
