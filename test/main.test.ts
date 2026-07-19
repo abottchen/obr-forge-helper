@@ -402,6 +402,35 @@ describe("mount", () => {
     expect(root.querySelector(".fh-init-edit")).toBeNull();
   });
 
+  it("does not wedge the editor open forever when a mousedown inside the panel is never followed by a click reaching root", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(input).not.toBeNull();
+
+    // A mousedown lands inside the panel (sets pointerDownInFlight), but the
+    // matching mouseup lands outside it — released after a drag off the
+    // panel, a right-click, or the pointer leaving the window. None of these
+    // ever produce a `click` that bubbles to root, so handleClick's own
+    // clear never runs. Dispatching the mouseup on `window`, not on `root`,
+    // is the point: a root-scoped listener would never see it either.
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+
+    // With the flag still (wrongly) true, Escape's closeInitEditor() call
+    // would clear model.editingInit but skip the render, leaving the stale
+    // editor sitting in the DOM forever.
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
   it("closes the editor when focus leaves it untouched", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");

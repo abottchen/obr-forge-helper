@@ -41,16 +41,28 @@ export async function mount(root: HTMLElement): Promise<() => void> {
 
   let combatants: Combatant[] = [];
 
-  // Set the instant a mousedown lands inside the panel; cleared by the click
-  // that (natively) always follows it — see handlePointerDown and
-  // closeInitEditor. A mousedown that blurs a focused init editor fires
-  // `focusout` synchronously, *before* `click`. If closeInitEditor were
-  // allowed to re-render on that focusout, renderList's innerHTML
-  // replacement would detach whatever node the browser already captured as
-  // the pending click's target, and the click that follows would land on
-  // nothing — silently swallowed, forcing the user to click twice. This flag
-  // lets closeInitEditor tell "a click is still coming, don't render yet"
-  // apart from "nothing more is coming, render now" (e.g. Escape).
+  // Set the instant a mousedown lands inside the panel; cleared on the
+  // mouseup that (natively) always follows it — see handlePointerDown,
+  // handlePointerUp, and closeInitEditor. A mousedown that blurs a focused
+  // init editor fires `focusout` synchronously, *before* click. If
+  // closeInitEditor were allowed to re-render on that focusout, renderList's
+  // innerHTML replacement would detach whatever node the browser already
+  // captured as the pending click's target, and the click that follows would
+  // land on nothing — silently swallowed, forcing the user to click twice.
+  // This flag lets closeInitEditor tell "a click is still coming, don't
+  // render yet" apart from "nothing more is coming, render now" (e.g.
+  // Escape).
+  //
+  // Cleared on mouseup rather than click: mouseup always fires before click
+  // in the browser's native order, and the flag only needs to stay true
+  // across the mousedown -> focusout window, so mouseup is the earliest safe
+  // place to clear it. It also covers cases where no click ever reaches
+  // root at all — mousedown followed by a release outside the panel (drag
+  // off it, a non-primary button, the pointer leaving the window before the
+  // button comes up) fires no click on root, and without this the flag
+  // would stay true for the rest of the session, wedging every future
+  // closeInitEditor() call — including the one Escape depends on — into
+  // skipping its render forever.
   let pointerDownInFlight = false;
 
   // Guards against out-of-order completion: refresh() is re-entrant (fired
@@ -100,13 +112,11 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   }
 
   const handleClick = (ev: MouseEvent): void => {
-    // This click is the one guaranteed to follow the mousedown that may have
-    // set the flag (see its declaration above and handlePointerDown below).
-    // Clearing it here, rather than in mousedown itself, is what lets
-    // closeInitEditor distinguish "still waiting for this click" from
-    // "nothing pending, render now".
-    pointerDownInFlight = false;
-
+    // pointerDownInFlight is not cleared here. It no longer needs to be:
+    // mouseup always fires before click in the browser's native order, so
+    // handlePointerUp (registered on window, see below) has already cleared
+    // it by the time any click reaches this handler. Clearing it a second
+    // time here bought nothing but a second place for the two to drift.
     const target = ev.target as HTMLElement;
 
     const initCell = target.closest<HTMLElement>(".fh-init");
@@ -268,11 +278,23 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     pointerDownInFlight = true;
   };
 
+  // Clears pointerDownInFlight — see its declaration above. Registered on
+  // window, not root: the whole point is to catch releases the panel never
+  // sees — the button coming up after a drag off the panel, outside its
+  // bounds, or even outside the browser window. A root-scoped listener would
+  // miss exactly those cases and the flag would wedge true forever, taking
+  // every future closeInitEditor() — including Escape's — down with it. Do
+  // not "tidy" this onto root.
+  const handlePointerUp = (): void => {
+    pointerDownInFlight = false;
+  };
+
   root.addEventListener("click", handleClick);
   root.addEventListener("change", handleChange);
   root.addEventListener("keydown", handleKeyDown);
   root.addEventListener("focusout", handleFocusOut);
   root.addEventListener("mousedown", handlePointerDown);
+  window.addEventListener("mouseup", handlePointerUp);
 
   const unsubItems = OBR.scene.items.onChange(() => {
     void refresh();
@@ -311,6 +333,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     root.removeEventListener("keydown", handleKeyDown);
     root.removeEventListener("focusout", handleFocusOut);
     root.removeEventListener("mousedown", handlePointerDown);
+    window.removeEventListener("mouseup", handlePointerUp);
     unsubItems();
     unsubRoom();
     unsubParty();
