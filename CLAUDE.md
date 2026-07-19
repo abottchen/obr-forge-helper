@@ -97,21 +97,32 @@ be open.
   independently refuses to render an editor for a row whose `allowed` is
   false. Both are needed: without the handler-side check, a row the viewer
   cannot touch would enter edit mode with no editor rendered to close it.
-- **`pointerDownInFlight` — the least guessable trap here.** `renderList`
+- **`pointerDownInFlight` guards `closeInitEditor` specifically — it does not
+  make renders in general safe during a pointer interaction.** `renderList`
   rebuilds all of `root` via `innerHTML`. A synchronous re-render triggered
   by a blur-family event (`focusout`, or a modified blur's `change`) can land
   between `mousedown` and `click` and destroy the node the browser captured
   as the pending click's target, silently swallowing that click — clicking
   from one open editor onto another row's badge did nothing but close the
   first. The flag is set on `mousedown` on `root`; while it is true,
-  `closeInitEditor` clears state without rendering, leaving the DOM intact so
-  the click still lands, and a fallback at the end of `handleClick` repaints
-  if the click matched no branch — every branch of `handleClick` must
-  `return`, or it falls through into that fallback. The flag is cleared on
-  `mouseup` registered on **`window`**, not `root`, because the release can
-  happen outside the panel; an earlier version cleared it only in
-  `handleClick` and could wedge true for the rest of the session, after which
-  Escape stopped visibly closing the editor.
+  `closeInitEditor("blur")` clears state without rendering, leaving the DOM
+  intact so the click still lands. `closeInitEditor("escape")` never checks
+  the flag — losing the click an Escape keypress is itself part of is
+  harmless, since nothing depends on that click landing anywhere. Every early
+  return in `handleClick`'s `.fh-init` branch that can observe a stale editor
+  calls `repaintStaleEditor()` first, and a click matching no branch at all
+  falls into the same repaint at the end of `handleClick`. The flag is
+  cleared on both `mouseup` and `dragend` (a native drag stops mouse events
+  entirely), both registered on **`window`**, not `root`, because the
+  release — or the drag grabbing the pointer — can happen outside the panel;
+  an earlier version cleared it only in `handleClick` and could wedge true
+  for the rest of the session, after which Escape stopped visibly closing the
+  editor. This reduces the click-swallow class, it does not eliminate it:
+  `handleChange`'s non-numeric-rejection path and `refresh()` both call
+  `renderList` with no flag check at all, so a `mousedown`→`click` window
+  landing across either of those can still swallow a click. Fixing that
+  would mean not rebuilding the whole panel on every render, a larger change
+  than this flag.
 - **The negative-init clamp branches on `parsed`, not the truncated value.**
   `Math.trunc(-0.5)` is `-0`, and `-0 < 0` is `false`, so testing the
   truncated value would let everything in `(-1, 0)` through as `-0` — which
