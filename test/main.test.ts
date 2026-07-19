@@ -935,12 +935,13 @@ describe("mount", () => {
     __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
     __testHooks.setItems([token("grieg", "p-1", 0)]);
     await mount(root);
-    // updateItems is a module-level mock shared across every test in this
-    // file and __testHooks.reset() does not clear vi.fn() call history —
-    // only the earlier tests that assert an exact call count bother to
-    // clear it first (see "writes once when Enter is followed by the blur
-    // it causes"). Do the same here so this test's count isn't polluted by
-    // whatever ran before it.
+    // clearMocks: true (vite.config.ts) already resets updateItems' call
+    // history before every test, and mount() above and the badge click
+    // below call no scene-item methods, so this is currently a no-op —
+    // kept so the `toHaveBeenCalledTimes` assertion further down stays
+    // honest about counting only what happens from here on, independent of
+    // that config setting. Same reasoning as the mockClear() in "writes
+    // even when the typed value matches what the box already held" above.
     OBR.scene.items.updateItems.mockClear();
 
     root.querySelector<HTMLElement>(".fh-init")!.click();
@@ -1007,7 +1008,8 @@ describe("mount", () => {
     __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
     __testHooks.setItems([token("grieg", "p-1", 0)]);
     await mount(root);
-    // See the mockClear() comment in the test above — same reason.
+    // See the mockClear() comment in "commits once during a click-away..."
+    // above — same reasoning, and equally a no-op today for the same reason.
     OBR.scene.items.updateItems.mockClear();
 
     root.querySelector<HTMLElement>(".fh-init")!.click();
