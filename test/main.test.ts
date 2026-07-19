@@ -686,6 +686,40 @@ describe("mount", () => {
     expect(root.querySelector(".fh-init")!.textContent).toBe("18");
   });
 
+  // Reject paths write nothing, so unlike the success path (which self-heals
+  // via the write's own scene-change refresh) nothing else was ever going to
+  // repaint a stranded editor here. commitInit must therefore close with
+  // Enter's own "keyboard" immediacy rather than the "blur" reason's gate —
+  // see CloseReason and commitInit's doc comment in main.ts.
+  it("closes immediately without writing when Enter commits invalid input while the mouse button is held", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = "3x";
+
+    // Mouse button goes down inside the editor (starting a text-selection
+    // drag) and stays down — no mouseup yet — while Enter commits the
+    // invalid value.
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    // The editor must be gone right away, without waiting for the mouseup
+    // that finally releases the held button below — the same shape as the
+    // Escape-while-held test above, now for Enter's reject path.
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+    expect(root.querySelector(".fh-init")!.textContent).toBe("18");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(18);
+  });
+
   // NOTE: this does not test commitInit's `editingInit !== id` guard, despite
   // resembling a test that would. editInit()'s Enter already commits and
   // calls closeInitEditor(), which (pointerDownInFlight being false here)
@@ -775,21 +809,31 @@ describe("mount", () => {
     expect(root.querySelector(".fh-init-edit")).toBeNull();
   });
 
-  // commitInit has exactly two call sites: handleKeyDown (Enter) and
-  // handleChange (`change` on `.fh-init-edit`) — handleFocusOut never calls
-  // it (see the test above). So the only way to make commitInit re-enter
-  // itself on a still-attached node is two commit-triggering events with no
-  // render in between. Real-world trigger: the user starts a text-selection
-  // drag inside the box (mousedown on the input itself — already focused,
-  // so this does not blur it, only sets pointerDownInFlight) and, before
-  // releasing the mouse button, presses Enter twice (a fast double-tap, or
-  // OS key-repeat on a held Enter). The first Enter commits and clears
-  // model.editingInit, but closeInitEditor sees pointerDownInFlight still
-  // true and skips its render, so the box stays open, attached, and
-  // focused — exactly the state needed for the second Enter's keydown to
-  // reach handleKeyDown -> commitInit again with the same input, where only
-  // the `editingInit !== id` check stops a second write.
-  it("commitInit's guard stops a second write when a second Enter reaches the still-attached editor before the held mousedown releases", async () => {
+  // commitInit has exactly two call sites: handleKeyDown (Enter, reason
+  // "keyboard") and handleChange (`change` on `.fh-init-edit`, reason
+  // "blur") — handleFocusOut never calls it (see the test above). Since the
+  // CloseReason fix, only a "blur"-reasoned commit can ever leave the editor
+  // attached afterward — "keyboard" (Escape and Enter) never checks
+  // pointerDownInFlight at all and always renders immediately, so two
+  // successive Enters can no longer reach commitInit on the same still-live
+  // node the way they used to: the first one's own render detaches it before
+  // a second keydown could ever be dispatched on it. `change` is the one
+  // event left that can leave the box attached while clearing
+  // model.editingInit, so the only way to make commitInit re-enter itself on
+  // a still-attached node is `change` followed by a second commit-triggering
+  // event. Real-world trigger: the user starts a text-selection drag inside
+  // the box (mousedown on the input itself — already focused, so this does
+  // not blur it, only sets pointerDownInFlight), the box commits via
+  // `change` without losing focus, and — before releasing the mouse
+  // button — presses Enter on the still-attached box. The `change` commits
+  // and clears model.editingInit, but closeInitEditor("blur") sees
+  // pointerDownInFlight still true and skips its render, so the box stays
+  // open, attached, and focused — exactly the state needed for the Enter's
+  // keydown to reach handleKeyDown -> commitInit again with the same input,
+  // where only the `editingInit !== id` check stops a second write. That
+  // check runs before any reason-based render decision, so it stops this
+  // "keyboard"-reasoned call just as it would a "blur"-reasoned one.
+  it("commitInit's guard stops a second write when Enter reaches an editor a same-value change already committed and left attached", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
     __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
@@ -803,10 +847,10 @@ describe("mount", () => {
     input.value = "20";
 
     input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // The first Enter's closeInitEditor() call must have skipped its
-    // render (pointerDownInFlight still true) for the second Enter to have
+    // The change's closeInitEditor("blur") call must have skipped its
+    // render (pointerDownInFlight still true) for the Enter below to have
     // anywhere live to land. Confirm that before trusting what follows.
     expect(root.contains(input)).toBe(true);
 

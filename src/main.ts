@@ -209,8 +209,9 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     );
     if (initInput) {
       // Blurring an edited box commits it. The focusout that follows finds
-      // editingInit already cleared and does nothing.
-      commitInit(initInput);
+      // editingInit already cleared and does nothing. "blur" because this
+      // handler only ever runs off a `change` event — see CloseReason above.
+      commitInit(initInput, "blur");
       return;
     }
 
@@ -270,17 +271,18 @@ export async function mount(root: HTMLElement): Promise<() => void> {
    * otherwise trigger is suppressed while a pointer interaction is in
    * flight — see the `pointerDownInFlight` gate below.
    *
-   * - `"blur"`: a `focusout`, or the `change`/commit that precedes one. Both
-   *   can land between a `mousedown` and the `click` it precedes, so they
-   *   must respect the gate — see pointerDownInFlight's declaration above.
-   * - `"escape"`: the user pressed Escape. Escape is not part of any
-   *   mousedown/click pair, so it never needs to wait: the flag being true
-   *   only means a mouse button happens to be down somewhere, and rendering
-   *   right away can at worst swallow a click that was going to land on the
-   *   very editor this Escape is closing — which is not a click anyone was
-   *   depending on landing anywhere else.
+   * - `"blur"`: a `focusout`, or the `change`-driven commit that a modified
+   *   blur fires first (see commitInit). Both can land between a
+   *   `mousedown` and the `click` it precedes, so they must respect the
+   *   gate — see pointerDownInFlight's declaration above.
+   * - `"keyboard"`: Escape, or the Enter-driven commit — both delivered
+   *   through handleKeyDown, never through a blur. Neither is ever the tail
+   *   end of a mousedown/click pair, so neither needs to wait: the flag
+   *   being true only means a mouse button happens to be down somewhere,
+   *   and rendering right away can at worst swallow a click that was headed
+   *   back to the very editor being closed.
    */
-  type CloseReason = "blur" | "escape";
+  type CloseReason = "blur" | "keyboard";
 
   function closeInitEditor(reason: CloseReason): void {
     if (model.editingInit === null) return;
@@ -304,8 +306,21 @@ export async function mount(root: HTMLElement): Promise<() => void> {
    * The editingInit check at the top is what makes this idempotent. Enter
    * commits and closes the editor, and the `change` and `focusout` that
    * follow the resulting blur would otherwise each try to commit again.
+   *
+   * `reason` is the CloseReason this call was itself invoked under — Enter
+   * passes `"keyboard"`, `change` passes `"blur"` — and is threaded straight
+   * through to every closeInitEditor() call below, so an Enter-driven commit
+   * closes with the same immediacy as Escape while a `change`-driven one
+   * stays subject to the pointerDownInFlight gate. Every call here used to be
+   * hardcoded to `"blur"`, which was wrong for Enter: on the success path the
+   * mistake self-heals, because the write's own scene-change event triggers
+   * a refresh() that repaints regardless — but on the two reject paths below
+   * (lost permission, non-numeric input) nothing writes anything, so an
+   * Enter pressed while a mouse button was held would clear model.editingInit
+   * and then sit there with the stale box still attached and focused, with
+   * nothing left to ever repaint it.
    */
-  function commitInit(input: HTMLInputElement): void {
+  function commitInit(input: HTMLInputElement, reason: CloseReason): void {
     const id = input.dataset.id;
     if (id === undefined || model.editingInit !== id) return;
     const c = combatants.find((x) => x.id === id);
@@ -314,9 +329,8 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // editor opened (e.g. the combatant left the roster) — nothing to
       // write, but the editor must still close. Nothing else will: no
       // further keydown, change, or focusout is coming for a control the
-      // next render won't draw. Not an Escape, so it stays subject to the
-      // pointerDownInFlight gate like any other blur-family close.
-      closeInitEditor("blur");
+      // next render won't draw.
+      closeInitEditor(reason);
       return;
     }
 
@@ -330,7 +344,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       if (!Number.isFinite(parsed)) {
         // Number("3x") is NaN. Reject outright rather than writing a bogus
         // 0 — closing re-renders the badge from the stored value.
-        closeInitEditor("blur");
+        closeInitEditor(reason);
         return;
       }
       const truncated = Math.trunc(parsed);
@@ -352,7 +366,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       value = parsed < 0 ? 1 : truncated;
     }
 
-    closeInitEditor("blur");
+    closeInitEditor(reason);
     void setInit(id, value).catch((e) =>
       console.warn("[forge-helper] init write failed", e),
     );
@@ -368,13 +382,15 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // text-selection drag started inside the box) would clear
       // model.editingInit but skip the render, leaving the box attached and
       // focused, silently swallowing whatever the user typed next.
-      closeInitEditor("escape");
+      closeInitEditor("keyboard");
     }
     if (ev.key === "Enter") {
       // Handled here rather than via `change`, which the browser skips when
-      // it considers the value unmodified. Enter always commits.
+      // it considers the value unmodified. Enter always commits, and — like
+      // Escape — never waits on pointerDownInFlight; see CloseReason and
+      // commitInit above for why a held mouse button must not strand it.
       ev.preventDefault();
-      commitInit(input);
+      commitInit(input, "keyboard");
     }
   };
 
