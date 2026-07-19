@@ -18,6 +18,8 @@ export interface ListModel {
   statuses: Map<string, InternalStatusMessage>;
   /** Connected players' display names, keyed by player id. Populated in refresh(). */
   ownerNames: Map<string, string>;
+  /** Id of the combatant whose badge is currently an editor, or null. */
+  editingInit: string | null;
 }
 
 export function bonusFor(model: ListModel, c: Combatant): number {
@@ -96,13 +98,27 @@ function renderRow(model: ListModel, c: Combatant): string {
       ? `<div class="fh-error">${escapeHtml(status.message)}</div>`
       : "";
 
+  // `allowed` gates the editor as well as the roll controls: the badge is
+  // rendered on every row, so a stray editingInit must not turn one the
+  // viewer cannot touch into a live input.
+  const editing = model.editingInit === c.id && allowed;
+  const initCell = editing
+    ? `<input class="fh-init-edit" type="text" inputmode="numeric"
+              data-id="${escapeHtml(c.id)}"
+              value="${c.init === 0 ? "" : String(c.init)}"
+              aria-label="Initiative for ${escapeHtml(c.name)}" />`
+    : `<span class="fh-init" data-id="${escapeHtml(c.id)}"
+              data-unrolled="${c.init === 0}"
+              ${allowed ? 'data-editable="true"' : ""}
+              ${allowed ? 'title="Click to set initiative"' : ""}
+              aria-label="Initiative">${c.init === 0 ? "—" : String(c.init)}</span>`;
+
   // One line per combatant: badge, name, bonus, mode, roll. An encounter can
   // run to a couple of dozen tokens, so row height is the budget that matters
   // — the name is the only thing that flexes, and it truncates.
   return `
     <div class="fh-row" data-id="${escapeHtml(c.id)}" data-state="${status?.state ?? "idle"}">
-      <span class="fh-init" data-unrolled="${c.init === 0}"
-            aria-label="Initiative">${c.init === 0 ? "—" : String(c.init)}</span>
+      ${initCell}
       <div class="fh-ident" title="${escapeHtml(c.name)}">
         <span class="fh-name">${escapeHtml(c.name)}</span>
         ${owner}

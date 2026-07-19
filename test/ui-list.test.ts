@@ -26,6 +26,7 @@ function model(over: Partial<ListModel> = {}): ListModel {
     drafts: new Map(),
     statuses: new Map(),
     ownerNames: new Map(),
+    editingInit: null,
     ...over,
   };
 }
@@ -96,6 +97,101 @@ describe("renderList", () => {
   it("renders a rolled initiative as its number", () => {
     renderList(root, model({ view: { pcs: [c({ id: "a", init: 17 })], gms: [] } }));
     expect(root.querySelector(".fh-init")!.textContent).toBe("17");
+  });
+
+  it("renders the initiative as a badge when nothing is being edited", () => {
+    renderList(root, model({ view: { pcs: [c({ id: "a", init: 17 })], gms: [] } }));
+    expect(root.querySelector(".fh-init")!.textContent).toBe("17");
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  it("renders an editor in place of the badge for the row being edited", () => {
+    renderList(
+      root,
+      model({
+        view: { pcs: [c({ id: "a", ownerId: "p-1", init: 17 })], gms: [] },
+        selfId: "p-1",
+        editingInit: "a",
+      }),
+    );
+    expect(root.querySelector(".fh-init")).toBeNull();
+    expect(root.querySelector<HTMLInputElement>(".fh-init-edit")!.value).toBe("17");
+  });
+
+  // The user is about to type a number; an em dash in the box would have to be
+  // deleted first, and "0" would have to be deleted too.
+  it("leaves the editor empty when the combatant is unrolled", () => {
+    renderList(
+      root,
+      model({
+        view: { pcs: [c({ id: "a", ownerId: "p-1", init: 0 })], gms: [] },
+        selfId: "p-1",
+        editingInit: "a",
+      }),
+    );
+    expect(root.querySelector<HTMLInputElement>(".fh-init-edit")!.value).toBe("");
+  });
+
+  it("edits only the named row", () => {
+    renderList(
+      root,
+      model({
+        view: {
+          pcs: [c({ id: "a", ownerId: "p-1" }), c({ id: "b", ownerId: "p-1" })],
+          gms: [],
+        },
+        selfId: "p-1",
+        editingInit: "a",
+      }),
+    );
+    expect(root.querySelectorAll(".fh-init-edit")).toHaveLength(1);
+    expect(root.querySelector<HTMLInputElement>(".fh-init-edit")!.dataset.id).toBe("a");
+  });
+
+  // editingInit is set by a click handler that checks permission, but the
+  // renderer must not depend on that check having happened.
+  it("refuses to render an editor on a token the player does not own", () => {
+    renderList(
+      root,
+      model({
+        view: { pcs: [c({ id: "a", ownerId: "p-2", init: 12 })], gms: [] },
+        selfId: "p-1",
+        editingInit: "a",
+      }),
+    );
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+    expect(root.querySelector(".fh-init")!.textContent).toBe("12");
+  });
+
+  it("refuses to render an editor while a roll is in flight", () => {
+    renderList(
+      root,
+      model({
+        view: { pcs: [c({ id: "a", ownerId: "p-1", init: 12 })], gms: [] },
+        selfId: "p-1",
+        editingInit: "a",
+        statuses: new Map([["a", { itemId: "a", state: "rolling" }]]),
+      }),
+    );
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  it("marks a badge the viewer may edit, and leaves others unmarked", () => {
+    renderList(
+      root,
+      model({
+        view: {
+          pcs: [c({ id: "mine", ownerId: "p-1" }), c({ id: "theirs", ownerId: "p-2" })],
+          gms: [],
+        },
+        selfId: "p-1",
+      }),
+    );
+    const badges = Array.from(root.querySelectorAll<HTMLElement>(".fh-init"));
+    const mine = badges.find((b) => b.dataset.id === "mine")!;
+    const theirs = badges.find((b) => b.dataset.id === "theirs")!;
+    expect(mine.dataset.editable).toBe("true");
+    expect(theirs.dataset.editable).toBeUndefined();
   });
 
   it("prefills the bonus from the DEX modifier", () => {

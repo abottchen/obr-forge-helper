@@ -181,6 +181,31 @@ body {
   color: var(--fh-accent);
 }
 
+/* Only badges the viewer can act on advertise themselves. The rest are
+   readouts and should not invite a click that does nothing. */
+.fh-init[data-editable="true"] { cursor: pointer; }
+.fh-init[data-editable="true"]:hover { border-color: var(--fh-accent); }
+
+/* Same box as the badge it replaces, so the row does not reflow on entering
+   edit mode. Sunken and centred like the bonus box, because it is one — but
+   it keeps the badge's weight and size so the number does not jump. */
+.fh-init-edit {
+  flex: none;
+  width: var(--fh-w-init);
+  height: 26px;
+  background: var(--fh-sunken);
+  color: var(--fh-text);
+  border: 1.5px solid var(--fh-accent);
+  border-radius: 6px;
+  padding: 0 2px;
+  text-align: center;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.fh-init-edit:focus { outline: none; }
+
 .fh-bonus {
   flex: none;
   width: var(--fh-w-mod);

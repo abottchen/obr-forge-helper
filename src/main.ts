@@ -36,6 +36,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     drafts: new Map<string, number>(),
     statuses: new Map<string, InternalStatusMessage>(),
     ownerNames: new Map<string, string>(),
+    editingInit: null,
   };
 
   let combatants: Combatant[] = [];
