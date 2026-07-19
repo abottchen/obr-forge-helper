@@ -90,6 +90,27 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   const handleClick = (ev: MouseEvent): void => {
     const target = ev.target as HTMLElement;
 
+    const initCell = target.closest<HTMLElement>(".fh-init");
+    if (initCell?.dataset.id) {
+      const id = initCell.dataset.id;
+      const c = combatants.find((x) => x.id === id);
+      // The badge renders on every row, editable or not, so the permission
+      // check lives here rather than in the selector. Without it, a row the
+      // viewer cannot touch would enter an edit mode that renders no editor
+      // and has nothing to close it.
+      if (!c || !canRoll(c, session.selfId, session.isGm)) return;
+      if (model.statuses.get(id)?.state === "rolling") return;
+      model.editingInit = id;
+      renderList(root, model);
+      // Nothing was focused before this render, so renderList's restoration
+      // has nothing to restore — focus the fresh editor explicitly. select()
+      // so typing replaces the current value instead of appending to it.
+      const editor = root.querySelector<HTMLInputElement>(".fh-init-edit");
+      editor?.focus();
+      editor?.select();
+      return;
+    }
+
     const modeBtn = target.closest<HTMLElement>(".fh-mode");
     if (modeBtn?.dataset.id && modeBtn.dataset.mode) {
       model.modes.set(modeBtn.dataset.id, modeBtn.dataset.mode as RollMode);
@@ -175,8 +196,33 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       });
   };
 
+  function closeInitEditor(): void {
+    if (model.editingInit === null) return;
+    model.editingInit = null;
+    renderList(root, model);
+  }
+
+  const handleKeyDown = (ev: KeyboardEvent): void => {
+    const input = (ev.target as HTMLElement).closest<HTMLInputElement>(".fh-init-edit");
+    if (!input) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeInitEditor();
+    }
+  };
+
+  // Closes an editor the user tabbed or clicked away from without changing.
+  // A *modified* blur fires `change` first, which commits and clears
+  // editingInit, so this finds nothing left to do — see handleChange.
+  const handleFocusOut = (ev: FocusEvent): void => {
+    if (!(ev.target as HTMLElement).closest(".fh-init-edit")) return;
+    closeInitEditor();
+  };
+
   root.addEventListener("click", handleClick);
   root.addEventListener("change", handleChange);
+  root.addEventListener("keydown", handleKeyDown);
+  root.addEventListener("focusout", handleFocusOut);
 
   const unsubItems = OBR.scene.items.onChange(() => {
     void refresh();
@@ -212,6 +258,8 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   return () => {
     root.removeEventListener("click", handleClick);
     root.removeEventListener("change", handleChange);
+    root.removeEventListener("keydown", handleKeyDown);
+    root.removeEventListener("focusout", handleFocusOut);
     unsubItems();
     unsubRoom();
     unsubParty();

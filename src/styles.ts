@@ -204,7 +204,15 @@ body {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
-.fh-init-edit:focus { outline: none; }
+/* The global :focus-visible rule draws its ring with outline, which bleeds
+   outward from the border edge — fine for isolated controls, but this badge
+   sits --fh-gap (6px) from the bonus box next to it, so an outline would
+   overlap its neighbour. An inset box-shadow gets the same 2px/accent weight
+   without leaving the box, so the row's metrics do not move. */
+.fh-init-edit:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--fh-accent);
+}
 
 .fh-bonus {
   flex: none;

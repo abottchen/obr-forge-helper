@@ -303,6 +303,66 @@ describe("mount", () => {
     expect(after.value).toBe("7");
   });
 
+  it("turns the initiative badge into an editor when clicked", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(input.value).toBe("12");
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("ignores a click on an initiative the player may not edit", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("someone-else", "p-2", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  it("closes the editor on Escape without writing", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = "20";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+    expect(root.querySelector(".fh-init")!.textContent).toBe("12");
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
+  });
+
+  it("closes the editor when focus leaves it untouched", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
+  });
+
   it("keeps a newer draft when an older write for the same field resolves after it", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
