@@ -329,14 +329,77 @@ describe("mount", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  it("ignores a click on an initiative the player may not edit", async () => {
+  // Not "no editor appears on the forbidden row" — renderRow's own `allowed`
+  // gate already refuses to draw an editor for a token the viewer does not
+  // own regardless of what handleClick does (see ui-list.test.ts's "refuses
+  // to render an editor on a token the player does not own"), so that
+  // assertion is satisfied even with handleClick's canRoll check deleted
+  // entirely and proves nothing about the handler-side guard `CLAUDE.md`
+  // calls load-bearing. What the handler-side check actually guards: without
+  // it, a click on a forbidden badge still reassigns model.editingInit away
+  // from whatever legitimate row was open and unconditionally re-renders,
+  // silently discarding that in-progress edit even though nothing
+  // permitted-looking ever appears on screen. Assert that survives instead.
+  it("ignores a click on an initiative the player may not edit, without disturbing an editor already open elsewhere", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
     __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
-    __testHooks.setItems([token("someone-else", "p-2", 12)]);
+    __testHooks.setItems([
+      token("mine", "p-1", 12),
+      token("someone-else", "p-2", 8),
+    ]);
     await mount(root);
 
-    root.querySelector<HTMLElement>(".fh-init")!.click();
+    root.querySelector<HTMLElement>('.fh-init[data-id="mine"]')!.click();
+    const before = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(before.dataset.id).toBe("mine");
+
+    root.querySelector<HTMLElement>('.fh-init[data-id="someone-else"]')!.click();
+
+    expect(
+      root.querySelector<HTMLInputElement>('.fh-init-edit[data-id="someone-else"]'),
+    ).toBeNull();
+    const after = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(after).not.toBeNull();
+    expect(after.dataset.id).toBe("mine");
+  });
+
+  // Finding 1's zombie-editor bug (a suppressed closeInitEditor leaving
+  // model.editingInit null but the old input still attached) has two
+  // call sites inside the .fh-init branch's early returns, plus the
+  // no-branch-matched fallback at the end of handleClick. The test above
+  // covers the permission check with a plain click; "does not leave a stale
+  // editor..." below covers the fallback. This one drives the race that
+  // actually lands on the permission-check early return itself, so all
+  // three repaintStaleEditor() call sites have direct coverage.
+  it("repaints a stale editor left by a suppressed close when the next click is denied by the permission check", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([
+      token("mine", "p-1", 12),
+      token("someone-else", "p-2", 8),
+    ]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>('.fh-init[data-id="mine"]')!.click();
+    const editor = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(editor.dataset.id).toBe("mine");
+
+    const forbidden = root.querySelector<HTMLElement>(
+      '.fh-init[data-id="someone-else"]',
+    )!;
+
+    // Real browser order (see the row-to-row test below): mousedown blurs
+    // the open editor, firing focusout and suppressing closeInitEditor's
+    // render (pointerDownInFlight is true) — model.editingInit is null but
+    // the "mine" input is still attached by the time the click lands on a
+    // badge the player may not touch, reaching the canRoll early return
+    // itself rather than the no-branch-matched fallback.
+    forbidden.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    editor.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    forbidden.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(root.querySelector(".fh-init-edit")).toBeNull();
   });
