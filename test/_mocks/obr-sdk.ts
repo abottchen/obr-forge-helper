@@ -163,3 +163,60 @@ export const __testHooks = {
 };
 
 vi.mock("@owlbear-rodeo/sdk", () => ({ default: OBR, OBR }));
+
+export type DicexBehaviour =
+  | { mode: "reply"; total: number }
+  | { mode: "error"; message: string }
+  | { mode: "silent" }
+  | { mode: "foreignId" };
+
+/**
+ * Stand-in for dicex. Mirrors the parts of the contract that matter:
+ * it replies on `{source}/roll-result`, echoes the rollId, and honours
+ * the playerId gate by ignoring requests addressed elsewhere.
+ */
+export function fakeDicex(behaviour: DicexBehaviour): () => void {
+  return OBR.broadcast.onMessage("dice-plus/roll-request", (ev) => {
+    const req = ev.data as {
+      rollId: string;
+      playerId: string;
+      source: string;
+      diceNotation: string;
+    };
+    if (req.playerId !== selfId) return;
+    if (behaviour.mode === "silent") return;
+    if (behaviour.mode === "error") {
+      void OBR.broadcast.sendMessage(
+        `${req.source}/roll-error`,
+        { rollId: req.rollId, error: behaviour.message, notation: req.diceNotation },
+        { destination: "LOCAL" },
+      );
+      return;
+    }
+    const rollId = behaviour.mode === "foreignId" ? "some-other-roll" : req.rollId;
+    const total = behaviour.mode === "reply" ? behaviour.total : 0;
+    void OBR.broadcast.sendMessage(
+      `${req.source}/roll-result`,
+      {
+        rollId,
+        playerId: req.playerId,
+        playerName: selfName,
+        rollTarget: "everyone",
+        result: {
+          totalValue: total,
+          rollSummary: `${total}`,
+          groups: [
+            {
+              description: req.diceNotation,
+              diceType: "d20",
+              dice: [{ value: total, kept: true }],
+              total,
+              isNegative: false,
+            },
+          ],
+        },
+      },
+      { destination: "LOCAL" },
+    );
+  });
+}
