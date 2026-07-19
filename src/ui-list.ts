@@ -50,10 +50,23 @@ export function pendingBulkRolls(model: ListModel): Combatant[] {
   );
 }
 
+/**
+ * Face-on icosahedron: hexagonal silhouette with the top face inscribed. A
+ * truer d20 also draws spokes from that face out to the hull corners, but at
+ * the 18px this renders at they collapse into mush — the two-path version
+ * reads as a die and the accurate one reads as a smudge. `aria-hidden`
+ * because the button carries the label.
+ */
+const D20_ICON = `
+  <svg class="fh-d20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 2 20.66 7 20.66 17 12 22 3.34 17 3.34 7Z" />
+    <path d="M12 5 18.4 16.2 5.6 16.2Z" />
+  </svg>`;
+
 const MODE_LABELS: Array<[RollMode, string, string]> = [
-  ["normal", "~", "Normal"],
-  ["advantage", "adv", "Advantage"],
-  ["disadvantage", "dis", "Disadvantage"],
+  ["normal", "Norm", "Normal"],
+  ["advantage", "Adv", "Advantage"],
+  ["disadvantage", "Dis", "Disadvantage"],
 ];
 
 function renderRow(model: ListModel, c: Combatant): string {
@@ -67,7 +80,7 @@ function renderRow(model: ListModel, c: Combatant): string {
   const ownerName = model.ownerNames.get(c.ownerId);
   const owner =
     ownerName !== undefined
-      ? `<div class="fh-owner">${escapeHtml(ownerName)}</div>`
+      ? `<span class="fh-owner">${escapeHtml(ownerName)}</span>`
       : "";
 
   const modeButtons = MODE_LABELS.map(
@@ -83,22 +96,41 @@ function renderRow(model: ListModel, c: Combatant): string {
       ? `<div class="fh-error">${escapeHtml(status.message)}</div>`
       : "";
 
+  // One line per combatant: badge, name, bonus, mode, roll. An encounter can
+  // run to a couple of dozen tokens, so row height is the budget that matters
+  // — the name is the only thing that flexes, and it truncates.
   return `
     <div class="fh-row" data-id="${escapeHtml(c.id)}" data-state="${status?.state ?? "idle"}">
-      <div class="fh-name">${escapeHtml(c.name)}</div>
-      ${owner}
-      <div class="fh-controls">
-        <input class="fh-bonus" type="text" inputmode="numeric"
-               data-id="${escapeHtml(c.id)}" value="${bonus}"
-               aria-label="Initiative bonus" ${allowed ? "" : "disabled"} />
-        <div class="fh-modes">${modeButtons}</div>
-        <span class="fh-init" data-unrolled="${c.init === 0}">${
-          c.init === 0 ? "—" : String(c.init)
-        }</span>
-        <button class="fh-roll" type="button" data-id="${escapeHtml(c.id)}"
-                ${allowed ? "" : "disabled"}>${rolling ? "…" : "Roll"}</button>
+      <span class="fh-init" data-unrolled="${c.init === 0}"
+            aria-label="Initiative">${c.init === 0 ? "—" : String(c.init)}</span>
+      <div class="fh-ident" title="${escapeHtml(c.name)}">
+        <span class="fh-name">${escapeHtml(c.name)}</span>
+        ${owner}
       </div>
+      <input class="fh-bonus" type="text" inputmode="numeric"
+             data-id="${escapeHtml(c.id)}" value="${bonus}"
+             aria-label="Initiative bonus" ${allowed ? "" : "disabled"} />
+      <div class="fh-modes">${modeButtons}</div>
+      <button class="fh-roll" type="button" data-id="${escapeHtml(c.id)}"
+              aria-label="Roll initiative for ${escapeHtml(c.name)}"
+              title="Roll initiative"
+              ${allowed ? "" : "disabled"}>${D20_ICON}</button>
       ${error}
+    </div>`;
+}
+
+/**
+ * Both no-op states lead with an unfilled initiative badge — the same slot the
+ * rows show before a roll lands. It states the panel's job without a second
+ * illustration vocabulary, and `aria-hidden` keeps it out of the reading order
+ * since the text below already says everything.
+ */
+function emptyState(lead: string, hint: string): string {
+  return `
+    <div class="fh-empty">
+      <div class="fh-empty-slot" aria-hidden="true">—</div>
+      <p class="fh-empty-lead">${lead}</p>
+      <p class="fh-empty-hint">${hint}</p>
     </div>`;
 }
 
@@ -145,7 +177,10 @@ function renderInto(root: HTMLElement, model: ListModel): void {
   // PC block. Block the listing entirely rather than guess. The GM's own
   // client never hits this: its gmId is always its own id (see session.ts).
   if (!model.isGm && model.gmId === null) {
-    root.innerHTML = `<div class="fh-root"><div class="fh-empty">Waiting for the GM to connect.</div></div>`;
+    root.innerHTML = `<div class="fh-root">${emptyState(
+      "Waiting for the GM to connect.",
+      "Rolls need the GM online to tell player tokens from GM tokens.",
+    )}</div>`;
     return;
   }
 
@@ -153,7 +188,11 @@ function renderInto(root: HTMLElement, model: ListModel): void {
   const total = pcs.length + gms.length;
 
   if (total === 0) {
-    root.innerHTML = `<div class="fh-root"><div class="fh-empty">No combatants on Forge's initiative list.</div></div>`;
+    // No columns to name when there is nothing under them.
+    root.innerHTML = `<div class="fh-root">${emptyState(
+      "No combatants on Forge's initiative list.",
+      "Add tokens to the list in Forge, then roll for them here.",
+    )}</div>`;
     return;
   }
 
@@ -170,9 +209,21 @@ function renderInto(root: HTMLElement, model: ListModel): void {
       ? `<div class="fh-divider">GM only</div>${gms.map((c) => renderRow(model, c)).join("")}${bulk}`
       : "";
 
+  // Named columns, mirroring Forge's own header. Hidden from assistive tech:
+  // every control below already carries its own label, so exposing these too
+  // would just read out a row of loose words before the list.
+  const columns = `
+    <div class="fh-cols" aria-hidden="true">
+      <span class="fh-col-init">Init</span>
+      <span class="fh-col-name">Name</span>
+      <span class="fh-col-mod">Mod</span>
+      <span class="fh-col-mode">Mode</span>
+      <span class="fh-col-roll">Roll</span>
+    </div>`;
+
   root.innerHTML = `
     <div class="fh-root">
-      <div class="fh-header">${total} combatant${total === 1 ? "" : "s"}</div>
+      ${columns}
       ${pcs.map((c) => renderRow(model, c)).join("")}
       ${gmBlock}
     </div>`;

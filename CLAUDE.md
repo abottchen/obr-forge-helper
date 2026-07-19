@@ -49,7 +49,7 @@ be open.
 | `background.ts` | Roll iteration, visibility, write-back |
 | `main.ts` | Popover boot, subscriptions, event wiring |
 | `ui-list.ts` | Roster rendering |
-| `styles.ts`, `escape.ts` | CSS-in-JS, HTML escaping |
+| `styles.ts`, `escape.ts` | CSS-in-JS (palette sampled from Forge), HTML escaping |
 
 ## Gotchas
 
