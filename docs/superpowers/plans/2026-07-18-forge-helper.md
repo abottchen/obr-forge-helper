@@ -33,7 +33,7 @@
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: `test/_mocks/obr-sdk.ts` exporting `OBR` and `__testHooks` with `reset()`, `setRole(role)`, `setSelf(id, name)`, `setParty(players)`, `setItems(items)`, `getItems()`, `broadcasts`, `store`. It calls `vi.mock("@owlbear-rodeo/sdk", ...)` at module scope, so test files MUST import it before any `src/` module.
+- Produces: `test/_mocks/obr-sdk.ts` exporting `OBR` and `__testHooks` with `reset()`, `setRole(role)`, `setSelf(id, name)`, `setParty(players)`, `setItems(items)`, `getItem(id)`, `broadcasts`, `store`. It calls `vi.mock("@owlbear-rodeo/sdk", ...)` at module scope, so test files MUST import it before any `src/` module.
 
 - [ ] **Step 1: Create `package.json`**
 
@@ -1472,7 +1472,7 @@ export function fakeDicex(behaviour: DicexBehaviour): () => void {
 
 ```ts
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { __testHooks, fakeDicex } from "./_mocks/obr-sdk";
+import { OBR, __testHooks, fakeDicex } from "./_mocks/obr-sdk";
 import { rollViaDicePlus, __dicePlusTestHooks } from "../src/dicePlus";
 import { EXTENSION_ID, DICE_PLUS_ROLL_REQUEST_CHANNEL } from "../src/constants";
 
@@ -1601,6 +1601,7 @@ import {
 } from "./constants";
 import type {
   RollTarget,
+  RollRequest,
   DicePlusResult,
   RollResultMessage,
   RollErrorMessage,
@@ -1682,23 +1683,25 @@ function rollOnce(
     void (async () => {
       try {
         const playerName = await OBR.player.getName();
-        await OBR.broadcast.sendMessage(
-          DICE_PLUS_ROLL_REQUEST_CHANNEL,
-          {
-            rollId,
-            // dicex drops the request unless this is the local player.
-            playerId: OBR.player.id,
-            playerName,
-            rollTarget,
-            diceNotation: notation,
-            showResults: true,
-            timestamp: Date.now(),
-            // Echoed back as the response channel prefix, and matched against
-            // dicex's TRUSTED_ROLL_TARGET_SOURCES to decide visibility.
-            source: EXTENSION_ID,
-          },
-          { destination: "LOCAL" },
-        );
+        // Typed, so a missing or misnamed field is a compile error. dicex
+        // validates with isRollRequest() and silently drops anything that
+        // fails — no error comes back, only a 20s timeout.
+        const payload: RollRequest = {
+          rollId,
+          // dicex drops the request unless this is the local player.
+          playerId: OBR.player.id,
+          playerName,
+          rollTarget,
+          diceNotation: notation,
+          showResults: true,
+          timestamp: Date.now(),
+          // Echoed back as the response channel prefix, and matched against
+          // dicex's TRUSTED_ROLL_TARGET_SOURCES to decide visibility.
+          source: EXTENSION_ID,
+        };
+        await OBR.broadcast.sendMessage(DICE_PLUS_ROLL_REQUEST_CHANNEL, payload, {
+          destination: "LOCAL",
+        });
       } catch (e) {
         finish(() => reject(e instanceof Error ? e : new Error(String(e))));
       }
@@ -2230,7 +2233,10 @@ function model(over: Partial<ListModel> = {}): ListModel {
 describe("renderList", () => {
   let root: HTMLElement;
   beforeEach(() => {
+    document.body.innerHTML = "";
     root = document.createElement("div");
+    // Appended so focus() works — the focus-preservation tests need it.
+    document.body.appendChild(root);
   });
 
   it("shows an empty state when nobody is on the list", () => {
@@ -2347,6 +2353,32 @@ describe("renderList", () => {
     expect(root.querySelector<HTMLButtonElement>(".fh-roll")!.disabled).toBe(true);
   });
 
+  it("preserves focus, uncommitted text and caret across a re-render", () => {
+    const m = model({ view: { pcs: [c({ id: "a", ownerId: "p-1" })], gms: [] } });
+    renderList(root, m);
+    const input = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    input.focus();
+    input.value = "17";
+    input.setSelectionRange(1, 1);
+
+    renderList(root, m);
+
+    const after = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    expect(document.activeElement).toBe(after);
+    expect(after.value).toBe("17");
+    expect(after.selectionStart).toBe(1);
+  });
+
+  it("does not restore focus to a row the user cannot roll", () => {
+    const m = model({
+      view: { pcs: [c({ id: "a", ownerId: "p-2" })], gms: [] },
+      selfId: "p-1",
+    });
+    renderList(root, m);
+    renderList(root, m);
+    expect(document.activeElement).not.toBe(root.querySelector(".fh-bonus"));
+  });
+
   it("shows the error message on a failed row", () => {
     renderList(
       root,
@@ -2428,7 +2460,7 @@ function renderRow(model: ListModel, c: Combatant): string {
     <div class="fh-row" data-id="${escapeHtml(c.id)}" data-state="${status?.state ?? "idle"}">
       <div class="fh-name">${escapeHtml(c.name)}</div>
       <div class="fh-controls">
-        <input class="fh-bonus" type="number" inputmode="numeric"
+        <input class="fh-bonus" type="text" inputmode="numeric"
                data-id="${escapeHtml(c.id)}" value="${bonus}"
                aria-label="Initiative bonus" ${allowed ? "" : "disabled"} />
         <div class="fh-modes">${modeButtons}</div>
@@ -2442,7 +2474,43 @@ function renderRow(model: ListModel, c: Combatant): string {
     </div>`;
 }
 
+/**
+ * Re-render replaces the whole panel, which would otherwise destroy a bonus
+ * box the user is typing in. Re-renders fire on any scene or metadata change
+ * — including the one our own override write triggers — so this is reachable
+ * simply by tabbing between two bonus boxes. Capture focus, uncommitted text
+ * and caret, then restore after.
+ *
+ * The input is type="text" rather than type="number" precisely so that
+ * selectionStart/setSelectionRange work: number inputs report a null
+ * selection in Chrome.
+ */
 export function renderList(root: HTMLElement, model: ListModel): void {
+  const active = document.activeElement;
+  const focused =
+    active instanceof HTMLInputElement &&
+    root.contains(active) &&
+    active.classList.contains("fh-bonus")
+      ? { id: active.dataset.id, text: active.value, caret: active.selectionStart }
+      : null;
+
+  renderInto(root, model);
+
+  if (focused?.id !== undefined) {
+    const next = Array.from(
+      root.querySelectorAll<HTMLInputElement>(".fh-bonus"),
+    ).find((el) => el.dataset.id === focused.id);
+    if (next && !next.disabled) {
+      next.value = focused.text;
+      next.focus();
+      if (focused.caret !== null) {
+        next.setSelectionRange(focused.caret, focused.caret);
+      }
+    }
+  }
+}
+
+function renderInto(root: HTMLElement, model: ListModel): void {
   const { pcs, gms } = model.view;
   const total = pcs.length + gms.length;
 
@@ -2476,7 +2544,7 @@ export function renderList(root: HTMLElement, model: ListModel): void {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npx vitest run test/ui-list.test.ts`
-Expected: 15 tests PASS.
+Expected: 17 tests PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -2759,9 +2827,15 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     model.drafts.set(id, value);
     // Persist only a real override; clear the key when it matches the prefill.
     const prefill = resolveBonus({}, id, c.dexRaw);
-    void writeOverride(id, value === prefill ? null : value).catch((e) =>
-      console.warn("[forge-helper] override write failed", e),
-    );
+    void writeOverride(id, value === prefill ? null : value)
+      .then(() => {
+        // Drop the draft once it is persisted, so room metadata is the single
+        // source of truth again. A draft that outlived its write would shadow
+        // an override later set from another client, pinning this panel to a
+        // stale value with nothing to dislodge it.
+        model.drafts.delete(id);
+      })
+      .catch((e) => console.warn("[forge-helper] override write failed", e));
   });
 
   const unsubItems = OBR.scene.items.onChange(() => {

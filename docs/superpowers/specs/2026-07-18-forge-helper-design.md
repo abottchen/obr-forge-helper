@@ -175,15 +175,22 @@ ownership to maintain. This is also the supported way to cover an absent player.
 
 Consequences:
 
-- If the GM is disconnected, a player's client cannot identify the GM id. Show PC rows
-  only. Never fall back to showing everything, or GM tokens leak.
+- If the GM is disconnected, a player's client cannot identify the GM id — and therefore
+  cannot tell a PC token from a GM token *at all*. There is no safe roster to render, so
+  the panel shows a "Waiting for the GM to connect" state and lists nothing.
+
+  An earlier draft of this spec said "show PC rows only" here. That is unimplementable for
+  exactly the reason above, and the implementation written against it took the other
+  branch — treating every unknown owner as PC-controlled — which exposed the entire GM
+  roster to any player whose GM had dropped. The instruction, not the code, was the bug.
+  The GM's own client is unaffected: its `gmId` is always its own id.
 - A GM-owned PC token lands in the GM-only block. Fix by assigning it to the player.
 
 ### Visibility and roll permission
 
 | Viewer | Sees | Can roll |
 |---|---|---|
-| Player | All PC-controlled rows | Rows where `createdUserId === OBR.player.id` |
+| Player | All PC-controlled rows (nothing at all if the GM is disconnected) | Rows where `createdUserId === OBR.player.id` |
 | GM | All rows, PC block then `── GM only ──` divider | All |
 
 Non-rollable rows render read-only rather than being hidden, so players can see who has
@@ -509,6 +516,13 @@ build`, Pages) and `test.yml` (PRs and non-main pushes) verbatim.
 - **The dice tray steals the sidebar.** dicex calls `OBR.action.open()` on every roll,
   so the forge-helper panel is replaced mid-roll. The background page makes this
   harmless, but the user must click back to forge-helper to roll again.
+- **A concurrent manual roll can be mistaken for ours.** dicex stamps the *pending slot's*
+  `rollId` onto whatever dice finish (`dicePlusResultReporter.ts`), so if the user rolls
+  manually in the tray while one of our requests is outstanding, we receive our own
+  `rollId` carrying their values — and write that total as initiative. Our `rollId` check
+  cannot catch this, because the id is ours; the fault is that dicex associates a result
+  with a pending request by recency rather than by identity. Not fixable from this side.
+  Rare in practice: it needs a manual roll inside the ~3-5s window of an initiative roll.
 - **No tie-breaking control.** Forge exposes no sortable tiebreak field; only the `init`
   integer can be written.
 - **Only one Dice+ consumer at a time.** If Dice+ proper and dicex are both installed
