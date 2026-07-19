@@ -316,6 +316,47 @@ describe("renderList", () => {
     expect(after.value).not.toBe("99");
   });
 
+  it("preserves the init editor's focus, uncommitted text and caret across a re-render", () => {
+    const m = model({
+      view: { pcs: [c({ id: "a", ownerId: "p-1", init: 12 })], gms: [] },
+      selfId: "p-1",
+      editingInit: "a",
+    });
+    renderList(root, m);
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.focus();
+    input.value = "20";
+    input.setSelectionRange(1, 1);
+
+    renderList(root, m);
+
+    const after = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(document.activeElement).toBe(after);
+    expect(after.value).toBe("20");
+    expect(after.selectionStart).toBe(1);
+  });
+
+  // The two editors coexist in one row. Restoring the wrong one would move
+  // focus across the row mid-keystroke.
+  it("restores the bonus box, not the init editor, when the bonus box had focus", () => {
+    const m = model({
+      view: { pcs: [c({ id: "a", ownerId: "p-1", init: 12 })], gms: [] },
+      selfId: "p-1",
+      editingInit: "a",
+    });
+    renderList(root, m);
+    const bonus = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    bonus.focus();
+    bonus.value = "9";
+
+    renderList(root, m);
+
+    const afterBonus = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    expect(document.activeElement).toBe(afterBonus);
+    expect(afterBonus.value).toBe("9");
+    expect(root.querySelector<HTMLInputElement>(".fh-init-edit")!.value).toBe("12");
+  });
+
   it("omits the owner label when the owner is not connected", () => {
     renderList(
       root,

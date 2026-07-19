@@ -157,24 +157,39 @@ function emptyState(lead: string, hint: string): string {
  * simply by tabbing between two bonus boxes. Capture focus, uncommitted text
  * and caret, then restore after.
  *
+ * The same applies to the init editor, which additionally vanishes entirely
+ * when `editingInit` is cleared; the find-by-id below simply misses in that
+ * case and nothing is restored, which is the wanted behaviour.
+ *
  * The input is type="text" rather than type="number" precisely so that
  * selectionStart/setSelectionRange work: number inputs report a null
  * selection in Chrome.
  */
 export function renderList(root: HTMLElement, model: ListModel): void {
   const active = document.activeElement;
+  // Both editable fields in a row are restored the same way; which class was
+  // focused is captured so focus cannot jump between them across a render.
+  const cls =
+    active instanceof HTMLInputElement && root.contains(active)
+      ? (["fh-bonus", "fh-init-edit"] as const).find((k) =>
+          active.classList.contains(k),
+        )
+      : undefined;
   const focused =
-    active instanceof HTMLInputElement &&
-    root.contains(active) &&
-    active.classList.contains("fh-bonus")
-      ? { id: active.dataset.id, text: active.value, caret: active.selectionStart }
+    cls !== undefined && active instanceof HTMLInputElement
+      ? {
+          cls,
+          id: active.dataset.id,
+          text: active.value,
+          caret: active.selectionStart,
+        }
       : null;
 
   renderInto(root, model);
 
   if (focused?.id !== undefined) {
     const next = Array.from(
-      root.querySelectorAll<HTMLInputElement>(".fh-bonus"),
+      root.querySelectorAll<HTMLInputElement>(`.${focused.cls}`),
     ).find((el) => el.dataset.id === focused.id);
     if (next && !next.disabled) {
       next.value = focused.text;
