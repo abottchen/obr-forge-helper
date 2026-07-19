@@ -61,8 +61,13 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   // off it, a non-primary button, the pointer leaving the window before the
   // button comes up) fires no click on root, and without this the flag
   // would stay true for the rest of the session, wedging every future
-  // closeInitEditor() call — including the one Escape depends on — into
-  // skipping its render forever.
+  // *blur-family* closeInitEditor("blur") call — an ordinary click-away that
+  // never modified the box, or the change a modified one commits through —
+  // into skipping its render forever: the editor would sit there attached
+  // and focused until some unrelated render (e.g. a scene or status change)
+  // happened to clean it up. Escape and Enter are unaffected either way —
+  // closeInitEditor("keyboard") never checks this flag; see CloseReason
+  // below.
   let pointerDownInFlight = false;
 
   // Guards against out-of-order completion: refresh() is re-entrant (fired
@@ -416,8 +421,9 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   // sees — the button coming up after a drag off the panel, outside its
   // bounds, or even outside the browser window. A root-scoped listener would
   // miss exactly those cases and the flag would wedge true forever, taking
-  // every future closeInitEditor() — including Escape's — down with it. Do
-  // not "tidy" this onto root.
+  // every future blur-family closeInitEditor("blur") call down with it —
+  // Escape and Enter's closeInitEditor("keyboard") calls don't check the
+  // flag and so aren't affected either way. Do not "tidy" this onto root.
   const handlePointerUp = (): void => {
     pointerDownInFlight = false;
   };
