@@ -584,6 +584,20 @@ describe("mount", () => {
     expect(root.querySelector(".fh-init")!.textContent).toBe("18");
   });
 
+  // NOTE: this does not test commitInit's `editingInit !== id` guard, despite
+  // resembling a test that would. editInit()'s Enter already commits and
+  // calls closeInitEditor(), which (pointerDownInFlight being false here)
+  // renders — and renderList's innerHTML replacement detaches the very node
+  // editInit() then returns. The `change`/`focusout` dispatched below target
+  // that detached node: a bubbling event with no attached ancestor never
+  // reaches root, so handleChange/handleFocusOut never run at all. The
+  // assertion below passes because nothing ran, not because a guard stopped
+  // anything — it would pass identically with commitInit's guard deleted.
+  // What this test actually documents is the detachment itself: Enter's own
+  // re-render removes the editor from the DOM, so no follow-on event —
+  // guarded or not — can ever reach a handler through it. See "commitInit's
+  // guard stops a second write..." below for a test that reaches the guard
+  // on a node that is still attached.
   it("writes once when Enter is followed by the blur it causes", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
@@ -599,6 +613,115 @@ describe("mount", () => {
 
     expect(OBR.scene.items.updateItems).not.toHaveBeenCalled();
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(18);
+  });
+
+  // A real click-away does not detach the input the way Enter's own
+  // re-render does, so — unlike the false positive above — this genuinely
+  // reaches live code on an attached node. But trace where the *second*
+  // event actually goes: handleFocusOut calls closeInitEditor(), never
+  // commitInit(). So this sequence exercises closeInitEditor's own
+  // `editingInit === null` early return, not commitInit's `editingInit !==
+  // id` guard — the two guards look alike but sit on different functions.
+  // Kept because "exactly one write during an ordinary click-away" is a
+  // real, valuable regression in its own right; see the test below for one
+  // that actually reaches commitInit's guard on a live node.
+  it("commits once during a click-away, via closeInitEditor's own idempotency check (not commitInit's guard — see below)", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+    // updateItems is a module-level mock shared across every test in this
+    // file and __testHooks.reset() does not clear vi.fn() call history —
+    // only the earlier tests that assert an exact call count bother to
+    // clear it first (see "writes once when Enter is followed by the blur
+    // it causes"). Do the same here so this test's count isn't polluted by
+    // whatever ran before it.
+    OBR.scene.items.updateItems.mockClear();
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = "20";
+
+    // The mousedown lands on the row's name label — anywhere inside root
+    // other than the input qualifies (see pointerDownInFlight's
+    // declaration) — reproducing a click away from the editor onto empty
+    // panel space, the ordinary way an editor closes without a badge or
+    // button underneath the pointer.
+    const nameEl = root.querySelector<HTMLElement>(".fh-name")!;
+    nameEl.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // If closeInitEditor had rendered on the commit above, this node would
+    // already be detached and the focusout below would be a no-op that
+    // proves nothing — the exact false positive this test replaces. Confirm
+    // that did not happen before trusting what follows.
+    expect(root.contains(input)).toBe(true);
+
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(OBR.scene.items.updateItems).toHaveBeenCalledTimes(1);
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(20);
+
+    // Finish the click-away: mouseup clears pointerDownInFlight, then the
+    // click that lands on no branch falls into handleClick's stale-editor
+    // fallback and renders, closing the editor.
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    nameEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  // commitInit has exactly two call sites: handleKeyDown (Enter) and
+  // handleChange (`change` on `.fh-init-edit`) — handleFocusOut never calls
+  // it (see the test above). So the only way to make commitInit re-enter
+  // itself on a still-attached node is two commit-triggering events with no
+  // render in between. Real-world trigger: the user starts a text-selection
+  // drag inside the box (mousedown on the input itself — already focused,
+  // so this does not blur it, only sets pointerDownInFlight) and, before
+  // releasing the mouse button, presses Enter twice (a fast double-tap, or
+  // OS key-repeat on a held Enter). The first Enter commits and clears
+  // model.editingInit, but closeInitEditor sees pointerDownInFlight still
+  // true and skips its render, so the box stays open, attached, and
+  // focused — exactly the state needed for the second Enter's keydown to
+  // reach handleKeyDown -> commitInit again with the same input, where only
+  // the `editingInit !== id` check stops a second write.
+  it("commitInit's guard stops a second write when a second Enter reaches the still-attached editor before the held mousedown releases", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+    // See the mockClear() comment in the test above — same reason.
+    OBR.scene.items.updateItems.mockClear();
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = "20";
+
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    // The first Enter's closeInitEditor() call must have skipped its
+    // render (pointerDownInFlight still true) for the second Enter to have
+    // anywhere live to land. Confirm that before trusting what follows.
+    expect(root.contains(input)).toBe(true);
+
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(OBR.scene.items.updateItems).toHaveBeenCalledTimes(1);
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(20);
+
+    // Release the held mousedown and click away, so the panel ends in a
+    // clean state like every other test.
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    root.querySelector<HTMLElement>(".fh-name")!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
   });
 
   it("writes an edited initiative when focus leaves the box", async () => {
