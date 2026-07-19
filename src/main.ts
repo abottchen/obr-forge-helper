@@ -185,6 +185,16 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   };
 
   const handleChange = (ev: Event): void => {
+    const initInput = (ev.target as HTMLElement).closest<HTMLInputElement>(
+      ".fh-init-edit",
+    );
+    if (initInput) {
+      // Blurring an edited box commits it. The focusout that follows finds
+      // editingInit already cleared and does nothing.
+      commitInit(initInput);
+      return;
+    }
+
     const input = (ev.target as HTMLElement).closest<HTMLInputElement>(".fh-bonus");
     if (!input?.dataset.id) return;
     const id = input.dataset.id;

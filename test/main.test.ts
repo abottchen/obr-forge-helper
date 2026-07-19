@@ -601,6 +601,43 @@ describe("mount", () => {
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(18);
   });
 
+  it("writes an edited initiative when focus leaves the box", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = "15";
+    // What a real blur-with-modification emits, in order.
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(15);
+  });
+
+  // The bonus box and the init editor both live in a row and both fire
+  // `change`; the handler must not confuse them.
+  it("still persists a bonus override while an init editor is open", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const bonus = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    bonus.value = "7";
+    bonus.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect((await OBR.room.getMetadata())[`${OVERRIDE_KEY_PREFIX}grieg`]).toBe(7);
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(0);
+  });
+
   it("keeps a newer draft when an older write for the same field resolves after it", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
