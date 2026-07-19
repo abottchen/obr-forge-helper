@@ -59,10 +59,17 @@ describe("renderList", () => {
     expect(root.textContent).not.toContain("No combatants on Forge's initiative list");
   });
 
-  it("renders a row per combatant with the count in the header", () => {
+  it("renders a row per combatant under a column header", () => {
     renderList(root, model({ view: { pcs: [c({ id: "a" }), c({ id: "b" })], gms: [] } }));
     expect(root.querySelectorAll(".fh-row")).toHaveLength(2);
-    expect(root.textContent).toContain("2 combatants");
+    expect(
+      Array.from(root.querySelectorAll(".fh-cols > *")).map((el) => el.textContent),
+    ).toEqual(["Init", "Name", "Mod", "Mode", "Roll"]);
+  });
+
+  it("omits the column header when there is nothing to list", () => {
+    renderList(root, model({ view: { pcs: [], gms: [] } }));
+    expect(root.querySelector(".fh-cols")).toBeNull();
   });
 
   it("shows a GM-only divider when GM rows are present", () => {
