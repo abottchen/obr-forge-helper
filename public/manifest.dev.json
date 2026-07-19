@@ -1,0 +1,16 @@
+{
+  "name": "Forge Helper (dev)",
+  "description": "Roll initiative for Forge combatants through dicex",
+  "version": "0.1.0-dev",
+  "manifest_version": 1,
+  "author": "abottchen",
+  "icon": "http://localhost:5173/icon.svg",
+  "action": {
+    "title": "Forge Helper (dev)",
+    "icon": "http://localhost:5173/icon.svg",
+    "popover": "http://localhost:5173/index.html",
+    "height": 640,
+    "width": 400
+  },
+  "background_url": "http://localhost:5173/background.html"
+}
