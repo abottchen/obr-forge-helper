@@ -542,6 +542,22 @@ describe("mount", () => {
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(1);
   });
 
+  // Math.trunc(-0.5) is -0, and -0 < 0 is false — a clamp that branches on
+  // the truncated value instead of the parsed one would let this slip past
+  // the negative check and write -0 (which Forge reads as unrolled) instead
+  // of the floor of 1.
+  it("clamps a fractional negative initiative to 1, not -0", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await mount(root);
+
+    await editInit("grieg", "-0.5");
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(1);
+  });
+
   it("truncates a fractional initiative", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");

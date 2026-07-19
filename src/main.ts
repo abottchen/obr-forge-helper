@@ -263,7 +263,15 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     const id = input.dataset.id;
     if (id === undefined || model.editingInit !== id) return;
     const c = combatants.find((x) => x.id === id);
-    if (!c || !canRoll(c, session.selfId, session.isGm)) return;
+    if (!c || !canRoll(c, session.selfId, session.isGm)) {
+      // Permission was re-checked against live data and lost since the
+      // editor opened (e.g. the combatant left the roster) — nothing to
+      // write, but the editor must still close. Nothing else will: no
+      // further keydown, change, or focusout is coming for a control the
+      // next render won't draw.
+      closeInitEditor();
+      return;
+    }
 
     const raw = input.value.trim();
     let value: number;
@@ -282,7 +290,14 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // 0 clears. A negative is a value the user meant, so it gets the roll
       // path's floor of 1 instead: written through, it would read as
       // unrolled and be swept into the next bulk roll.
-      value = truncated < 0 ? 1 : truncated;
+      //
+      // The sign check is on `parsed`, not `truncated`: Math.trunc(-0.5) is
+      // -0, and -0 < 0 is false in JS, so branching on the truncated value
+      // would let every input strictly between -1 and 0 slip past this
+      // check and write -0 — Forge reads that as unrolled, same as 0. Do
+      // not "simplify" this to Math.max(1, truncated) either — that clamps
+      // the legitimate 0-means-clear case up to 1 and breaks clearing.
+      value = parsed < 0 ? 1 : truncated;
     }
 
     closeInitEditor();
