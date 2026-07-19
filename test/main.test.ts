@@ -1,0 +1,352 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { OBR, __testHooks } from "./_mocks/obr-sdk";
+import { mount } from "../src/main";
+import {
+  F_ON_LIST,
+  F_INIT,
+  F_NAME,
+  F_DEX,
+  INTERNAL_ROLL_CHANNEL,
+  INTERNAL_STATUS_CHANNEL,
+  OVERRIDE_KEY_PREFIX,
+} from "../src/constants";
+
+function token(id: string, owner: string, init = 0, dex = "14") {
+  return {
+    id,
+    name: id,
+    createdUserId: owner,
+    layer: "CHARACTER",
+    metadata: { [F_ON_LIST]: true, [F_INIT]: init, [F_NAME]: id, [F_DEX]: dex },
+    text: { plainText: "" },
+  };
+}
+
+describe("mount", () => {
+  let root: HTMLElement;
+  beforeEach(() => {
+    __testHooks.reset();
+    root = document.createElement("div");
+    document.body.appendChild(root);
+  });
+
+  it("renders the roster for a player, hiding GM tokens", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([
+      { id: "p-1", name: "Simon", role: "PLAYER" },
+      { id: "gm-1", name: "Adam", role: "GM" },
+    ]);
+    __testHooks.setItems([token("grieg", "p-1"), token("goblin", "gm-1")]);
+    await mount(root);
+    expect(root.textContent).toContain("grieg");
+    expect(root.textContent).not.toContain("goblin");
+  });
+
+  it("shows a blocked message instead of leaking GM-controlled tokens when the GM is disconnected", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    // No GM entry at all — resolveSession() cannot identify the GM, so
+    // toCombatant() would otherwise mark every token (including the GM's
+    // own monster) as gmControlled: false and dump it into the PC block.
+    __testHooks.setParty([{ id: "p-1", name: "Simon", role: "PLAYER" }]);
+    __testHooks.setItems([token("grieg", "p-1"), token("goblin", "gm-1")]);
+    await mount(root);
+    expect(root.textContent).toContain("Waiting for the GM to connect.");
+    expect(root.textContent).not.toContain("goblin");
+    expect(root.textContent).not.toContain("grieg");
+  });
+
+  it("recovers from the blocked state once the GM connects, via a re-resolved session", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "p-1", name: "Simon", role: "PLAYER" }]); // no GM yet
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    expect(root.textContent).toContain("Waiting for the GM to connect.");
+
+    __testHooks.setParty([
+      { id: "p-1", name: "Simon", role: "PLAYER" },
+      { id: "gm-1", name: "Adam", role: "GM" },
+    ]);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(root.textContent).not.toContain("Waiting for the GM to connect.");
+    expect(root.textContent).toContain("grieg");
+  });
+
+  it("shows the owning player's name next to the combatant", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([
+      { id: "p-1", name: "Simon", role: "PLAYER" },
+      { id: "gm-1", name: "Adam", role: "GM" },
+    ]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    expect(root.querySelector(".fh-owner")!.textContent).toBe("Simon");
+  });
+
+  it("sends a one-element roll request when Roll is clicked", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>(".fh-roll")!.click();
+    const req = __testHooks.broadcasts.find((b) => b.channel === INTERNAL_ROLL_CHANNEL)!;
+    expect(req.destination).toBe("LOCAL");
+    expect(req.data).toEqual({
+      rolls: [{ itemId: "grieg", bonus: 2, mode: "normal" }],
+    });
+  });
+
+  it("sends the selected mode with the roll", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.fh-mode[data-mode="advantage"]')!.click();
+    root.querySelector<HTMLButtonElement>(".fh-roll")!.click();
+    const req = __testHooks.broadcasts.find((b) => b.channel === INTERNAL_ROLL_CHANNEL)!;
+    expect((req.data as { rolls: Array<{ mode: string }> }).rolls[0]!.mode).toBe(
+      "advantage",
+    );
+  });
+
+  it("persists an edited bonus as an override", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    const input = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    input.value = "7";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+    const md = await OBR.room.getMetadata();
+    expect(md[`${OVERRIDE_KEY_PREFIX}grieg`]).toBe(7);
+  });
+
+  it("resets the mode to normal after rolling", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    root.querySelector<HTMLButtonElement>('.fh-mode[data-mode="advantage"]')!.click();
+    root.querySelector<HTMLButtonElement>(".fh-roll")!.click();
+    const pressed = root.querySelector<HTMLButtonElement>(
+      '.fh-mode[aria-pressed="true"]',
+    )!;
+    expect(pressed.dataset.mode).toBe("normal");
+  });
+
+  it("re-renders when a token's initiative changes", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    expect(root.querySelector(".fh-init")!.textContent).toBe("—");
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(root.querySelector(".fh-init")!.textContent).toBe("18");
+  });
+
+  it("marks a row as rolling when the background reports status", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    await OBR.broadcast.sendMessage(
+      INTERNAL_STATUS_CHANNEL,
+      { itemId: "grieg", state: "rolling" },
+      { destination: "LOCAL" },
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(root.querySelector<HTMLElement>(".fh-row")!.dataset.state).toBe("rolling");
+  });
+
+  it("does not let a stale refresh overwrite a fresher one", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("a", "p-1")]);
+    await mount(root);
+
+    // Gate the *first* post-mount call to getItems() so that refresh #1
+    // (triggered below) captures a 2-item snapshot but does not resolve
+    // until released, while refresh #2 (also triggered below, ungated)
+    // resolves normally with a 3-item snapshot in the meantime.
+    const original = OBR.scene.items.getItems.getMockImplementation()!;
+    let releaseStale: (() => void) | undefined;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    let callCount = 0;
+    OBR.scene.items.getItems.mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        const snapshot = await original();
+        await staleGate;
+        return snapshot;
+      }
+      return original();
+    });
+
+    try {
+      __testHooks.setItems([token("a", "p-1"), token("b", "p-1")]); // refresh #1: stale, gated
+      __testHooks.setItems([
+        token("a", "p-1"),
+        token("b", "p-1"),
+        token("c", "p-1"),
+      ]); // refresh #2: fresh, ungated
+
+      await new Promise((r) => setTimeout(r, 0));
+      expect(root.querySelectorAll(".fh-row").length).toBe(3);
+
+      releaseStale!();
+      await new Promise((r) => setTimeout(r, 0));
+
+      // The stale refresh (2 items) resolved last in wall-clock time, but it
+      // started before the fresh one (3 items) and must not win.
+      expect(root.querySelectorAll(".fh-row").length).toBe(3);
+    } finally {
+      OBR.scene.items.getItems.mockImplementation(original);
+    }
+  });
+
+  it("shows GM rows and the bulk button for the GM", async () => {
+    __testHooks.setRole("GM");
+    __testHooks.setSelf("gm-1");
+    __testHooks.setItems([token("grieg", "p-1"), token("goblin", "gm-1")]);
+    await mount(root);
+    expect(root.textContent).toContain("goblin");
+    expect(root.querySelector("#fh-bulk")).not.toBeNull();
+  });
+
+  it("gives players no bulk button", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]);
+    await mount(root);
+    expect(root.querySelector("#fh-bulk")).toBeNull();
+  });
+
+  it("keeps an override for a token that is in the scene but off Forge's initiative list", async () => {
+    __testHooks.setRole("GM");
+    __testHooks.setSelf("gm-1");
+    const offListToken = token("goblin", "gm-1");
+    offListToken.metadata[F_ON_LIST] = false;
+    __testHooks.setItems([offListToken]);
+    await OBR.room.setMetadata({ [`${OVERRIDE_KEY_PREFIX}goblin`]: 5 });
+
+    await mount(root);
+    // The GM-only prune runs fire-and-forget at the end of mount(); flush
+    // the microtask queue so it has a chance to (wrongly) run to completion.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const md = await OBR.room.getMetadata();
+    expect(md[`${OVERRIDE_KEY_PREFIX}goblin`]).toBe(5);
+  });
+
+  it("clears the override, not a literal 0, when the bonus box is emptied", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]); // dex 14 -> prefill 2
+    await mount(root);
+
+    const input = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    input.value = "7";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect((await OBR.room.getMetadata())[`${OVERRIDE_KEY_PREFIX}grieg`]).toBe(7);
+
+    const input2 = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    input2.value = "";
+    input2.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const md = await OBR.room.getMetadata();
+    expect(`${OVERRIDE_KEY_PREFIX}grieg` in md).toBe(false);
+    const finalInput = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    expect(finalInput.value).toBe("2");
+  });
+
+  it("rejects a non-numeric bonus, keeping the previously stored override", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]); // dex 14 -> prefill 2
+    await mount(root);
+
+    const input = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    input.value = "7";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect((await OBR.room.getMetadata())[`${OVERRIDE_KEY_PREFIX}grieg`]).toBe(7);
+
+    const input2 = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    input2.value = "3x";
+    input2.dispatchEvent(new Event("change", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Number("3x") is NaN — must not fall through to a bogus override of 0.
+    const md = await OBR.room.getMetadata();
+    expect(md[`${OVERRIDE_KEY_PREFIX}grieg`]).toBe(7);
+    const after = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+    expect(after.value).toBe("7");
+  });
+
+  it("keeps a newer draft when an older write for the same field resolves after it", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1")]); // dex 14 -> prefill 2
+    await mount(root);
+
+    // Gate the second setMetadata call (the second edit's write) so it
+    // stays in flight while the first edit's write resolves on its own,
+    // reproducing "two quick edits to the same field" deterministically.
+    const original = OBR.room.setMetadata.getMockImplementation()!;
+    let releaseSecondWrite: (() => void) | undefined;
+    const secondWriteGate = new Promise<void>((resolve) => {
+      releaseSecondWrite = resolve;
+    });
+    let callCount = 0;
+    OBR.room.setMetadata.mockImplementation((patch: Record<string, unknown>) => {
+      callCount += 1;
+      if (callCount === 2) return secondWriteGate.then(() => original(patch));
+      return original(patch);
+    });
+
+    try {
+      const input = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+      input.value = "5";
+      input.dispatchEvent(new Event("change", { bubbles: true })); // write #1 (5), ungated
+
+      input.value = "9";
+      input.dispatchEvent(new Event("change", { bubbles: true })); // draft -> 9, write #2 (9) gated
+
+      // Let write #1 resolve and its `.then()` fire, and let the refresh it
+      // triggers render, all before write #2 has landed.
+      await new Promise((r) => setTimeout(r, 0));
+
+      const midInput = root.querySelector<HTMLInputElement>(".fh-bonus")!;
+      expect(midInput.value).toBe("9");
+
+      releaseSecondWrite!();
+      await new Promise((r) => setTimeout(r, 0));
+
+      const md = await OBR.room.getMetadata();
+      expect(md[`${OVERRIDE_KEY_PREFIX}grieg`]).toBe(9);
+    } finally {
+      OBR.room.setMetadata.mockImplementation(original);
+    }
+  });
+});
