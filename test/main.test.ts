@@ -347,6 +347,61 @@ describe("mount", () => {
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
   });
 
+  it("opens row B's editor when clicking from row A's open editor onto row B's badge, in real mousedown-before-click order", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([
+      token("grieg", "p-1", 12),
+      token("aria", "p-1", 8),
+    ]);
+    await mount(root);
+
+    // Open row A's editor the ordinary way.
+    root.querySelector<HTMLElement>('.fh-init[data-id="grieg"]')!.click();
+    const rowA = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(rowA.dataset.id).toBe("grieg");
+
+    // Capture row B's badge before dispatching anything — with the bug, this
+    // is the node that gets silently detached mid-sequence.
+    const rowB = root.querySelector<HTMLElement>('.fh-init[data-id="aria"]')!;
+
+    // Reproduce the real browser ordering for a click that lands on a
+    // different element than the one currently focused: mousedown first
+    // (its default action is what blurs row A's input), then focusout
+    // bubbling from the now-blurred input, then click. A plain
+    // `rowB.click()` only dispatches the synthetic `click` and never
+    // reproduces the race this guards against.
+    rowB.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    rowA.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    rowB.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const editors = root.querySelectorAll<HTMLInputElement>(".fh-init-edit");
+    expect(editors.length).toBe(1);
+    expect(editors[0]!.dataset.id).toBe("aria");
+  });
+
+  it("does not leave a stale editor in the DOM when the click after a suppressed close matches no branch", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const rowA = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(rowA).not.toBeNull();
+
+    // A row's name element matches none of handleClick's branches.
+    const nameEl = root.querySelector<HTMLElement>(".fh-name")!;
+
+    nameEl.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    rowA.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    nameEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
   it("closes the editor when focus leaves it untouched", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");

@@ -41,6 +41,18 @@ export async function mount(root: HTMLElement): Promise<() => void> {
 
   let combatants: Combatant[] = [];
 
+  // Set the instant a mousedown lands inside the panel; cleared by the click
+  // that (natively) always follows it — see handlePointerDown and
+  // closeInitEditor. A mousedown that blurs a focused init editor fires
+  // `focusout` synchronously, *before* `click`. If closeInitEditor were
+  // allowed to re-render on that focusout, renderList's innerHTML
+  // replacement would detach whatever node the browser already captured as
+  // the pending click's target, and the click that follows would land on
+  // nothing — silently swallowed, forcing the user to click twice. This flag
+  // lets closeInitEditor tell "a click is still coming, don't render yet"
+  // apart from "nothing more is coming, render now" (e.g. Escape).
+  let pointerDownInFlight = false;
+
   // Guards against out-of-order completion: refresh() is re-entrant (fired
   // by several subscriptions, including one triggered by our own
   // writeOverride), so two overlapping calls can resolve in either order.
@@ -88,6 +100,13 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   }
 
   const handleClick = (ev: MouseEvent): void => {
+    // This click is the one guaranteed to follow the mousedown that may have
+    // set the flag (see its declaration above and handlePointerDown below).
+    // Clearing it here, rather than in mousedown itself, is what lets
+    // closeInitEditor distinguish "still waiting for this click" from
+    // "nothing pending, render now".
+    pointerDownInFlight = false;
+
     const target = ev.target as HTMLElement;
 
     const initCell = target.closest<HTMLElement>(".fh-init");
@@ -141,6 +160,17 @@ export async function mount(root: HTMLElement): Promise<() => void> {
         mode: model.modes.get(c.id) ?? "normal",
       }));
       requestRolls(specs);
+      return;
+    }
+
+    // No branch above matched, so nothing above re-rendered. If a pointer
+    // interaction (this click's own mousedown) suppressed a closeInitEditor
+    // render earlier in this same interaction — see closeInitEditor —
+    // model.editingInit is already null but the old .fh-init-edit is still
+    // sitting in the DOM, e.g. this click landed on empty space inside the
+    // panel rather than another badge. Render once so it cannot linger.
+    if (model.editingInit === null && root.querySelector(".fh-init-edit")) {
+      renderList(root, model);
     }
   };
 
@@ -199,6 +229,16 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   function closeInitEditor(): void {
     if (model.editingInit === null) return;
     model.editingInit = null;
+    if (pointerDownInFlight) {
+      // A mousedown just landed inside the panel and its native click has
+      // not fired yet (see pointerDownInFlight's declaration). Rendering now
+      // would replace every node under root, including whichever one the
+      // browser already captured as that pending click's target — the click
+      // would then land on a detached node and be silently swallowed. Leave
+      // the DOM as-is; handleClick renders once the click actually arrives,
+      // either by matching a branch or via its own stale-editor fallback.
+      return;
+    }
     renderList(root, model);
   }
 
@@ -219,10 +259,20 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     closeInitEditor();
   };
 
+  // Marks a pointer interaction as in flight for closeInitEditor — see
+  // pointerDownInFlight's declaration above. Every mousedown inside the
+  // panel qualifies, not just ones on a badge: a mousedown anywhere in root
+  // can blur a focused editor elsewhere in the row list and trigger the same
+  // focusout-before-click race.
+  const handlePointerDown = (): void => {
+    pointerDownInFlight = true;
+  };
+
   root.addEventListener("click", handleClick);
   root.addEventListener("change", handleChange);
   root.addEventListener("keydown", handleKeyDown);
   root.addEventListener("focusout", handleFocusOut);
+  root.addEventListener("mousedown", handlePointerDown);
 
   const unsubItems = OBR.scene.items.onChange(() => {
     void refresh();
@@ -260,6 +310,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     root.removeEventListener("change", handleChange);
     root.removeEventListener("keydown", handleKeyDown);
     root.removeEventListener("focusout", handleFocusOut);
+    root.removeEventListener("mousedown", handlePointerDown);
     unsubItems();
     unsubRoom();
     unsubParty();
