@@ -42,13 +42,13 @@ be open.
 | `types.ts` | Combatant, roll specs, Dice+ payload types |
 | `session.ts` | Who am I, who is the GM |
 | `roster.ts` | Sorting, PC/GM split, roll permission (pure) |
-| `forge.ts` | Read roster from scene items, write `init` |
+| `forge.ts` | Read roster from scene items, write `init` (rolled or manual) |
 | `bonus.ts` | DEX modifier, override read/write/prune (OBR *room* metadata) |
 | `notation.ts` | Mode + bonus to dicex notation (pure) |
 | `dicePlus.ts` | dicex client: correlate, time out, serialize |
 | `background.ts` | Roll iteration, visibility, write-back |
-| `main.ts` | Popover boot, subscriptions, event wiring |
-| `ui-list.ts` | Roster rendering |
+| `main.ts` | Popover boot, subscriptions, event wiring, including the init-editor state machine |
+| `ui-list.ts` | Roster rendering, including the init editor and its focus restoration |
 | `styles.ts`, `escape.ts` | CSS-in-JS (palette sampled from Forge), HTML escaping |
 
 ## Gotchas
@@ -75,9 +75,49 @@ be open.
   through `innerHTML`. Use `escapeHtml()`.
 - **Never write a Forge key other than `init`.** Always a number, always via
   `updateItems` so the rest of the stat block merges through.
-- **`Math.max(1, total)` on write is deliberate.** Forge reads `0` as
-  unrolled; without the clamp a natural 1 with a negative modifier writes `0`
-  and gets re-rolled by the next bulk roll.
+- **`writeInit` clamps, `setInit` does not.** Forge reads `0` as unrolled, so
+  the roll path (`writeInit`) floors at 1 — without it a natural 1 with a
+  negative modifier writes `0` and gets re-rolled by the next bulk roll.
+  Manual entry calls `setInit` directly instead, because clearing a value
+  *means* writing `0`. Do not collapse the two back together.
+- **Enter commits a manual init edit via a dedicated `keydown` handler, not
+  the `change` event alone.** The browser only fires `change` on Enter when
+  it considers the value modified, so a commit path that waited on `change`
+  would silently write nothing when a reopened badge is retyped with the
+  number it already showed. `commitInit` (called from both `handleKeyDown`
+  and `handleChange`) guards itself by checking `model.editingInit` still
+  names the row before writing. An ordinary Enter never needs that guard —
+  its own re-render detaches the input before the trailing `change`/
+  `focusout` can reach a handler — but a mousedown that holds
+  `pointerDownInFlight` true (below) can leave the same editor attached and
+  focused for a second Enter to reach `commitInit` again, and that guard is
+  what stops the second write.
+- **The init badge renders on every row, editable or not.** The permission
+  check lives in the click handler in `main.ts`, and `renderRow`
+  independently refuses to render an editor for a row whose `allowed` is
+  false. Both are needed: without the handler-side check, a row the viewer
+  cannot touch would enter edit mode with no editor rendered to close it.
+- **`pointerDownInFlight` — the least guessable trap here.** `renderList`
+  rebuilds all of `root` via `innerHTML`. A synchronous re-render triggered
+  by a blur-family event (`focusout`, or a modified blur's `change`) can land
+  between `mousedown` and `click` and destroy the node the browser captured
+  as the pending click's target, silently swallowing that click — clicking
+  from one open editor onto another row's badge did nothing but close the
+  first. The flag is set on `mousedown` on `root`; while it is true,
+  `closeInitEditor` clears state without rendering, leaving the DOM intact so
+  the click still lands, and a fallback at the end of `handleClick` repaints
+  if the click matched no branch — every branch of `handleClick` must
+  `return`, or it falls through into that fallback. The flag is cleared on
+  `mouseup` registered on **`window`**, not `root`, because the release can
+  happen outside the panel; an earlier version cleared it only in
+  `handleClick` and could wedge true for the rest of the session, after which
+  Escape stopped visibly closing the editor.
+- **The negative-init clamp branches on `parsed`, not the truncated value.**
+  `Math.trunc(-0.5)` is `-0`, and `-0 < 0` is `false`, so testing the
+  truncated value would let everything in `(-1, 0)` through as `-0` — which
+  Forge reads as unrolled, silently clearing the row instead of clamping to
+  1. `Math.max(1, truncated)` is not the fix either: it clamps the legitimate
+  `0`-means-clear case up to 1 and breaks clearing.
 - **One dicex roll at a time per client.** dicex keeps a single pending
   request in a module global. `dicePlus.ts` serializes. Cross-player
   concurrency needs nothing — requests are LOCAL and dicex ignores requests
