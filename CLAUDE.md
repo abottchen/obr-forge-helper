@@ -149,11 +149,13 @@ be open.
   committed via `change` — stopped visibly closing the editor, though Escape
   and Enter kept working since neither ever checked the flag. This reduces
   the click-swallow class, it does not eliminate it:
-  `handleChange`'s non-numeric-rejection path and `refresh()` both call
-  `renderList` with no flag check at all, so a `mousedown`→`click` window
-  landing across either of those can still swallow a click. Fixing that
-  would mean not rebuilding the whole panel on every render, a larger change
-  than this flag.
+  `handleChange`'s non-numeric-rejection path, `refresh()`, and the
+  `INTERNAL_STATUS_CHANNEL` handler all call `renderList` with no flag check
+  at all — the last of the three is async and independent of the user's
+  gesture, arguably the worst of the three — so a `mousedown`→`click` window
+  landing across any of them can still swallow a click. Fixing that would
+  mean not rebuilding the whole panel on every render, a larger change than
+  this flag.
 - **The negative-init clamp branches on `parsed`, not the truncated value.**
   `Math.trunc(-0.5)` is `-0`, and `-0 < 0` is `false`, so testing the
   truncated value would let everything in `(-1, 0)` through as `-0` — which
