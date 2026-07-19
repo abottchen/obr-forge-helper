@@ -155,6 +155,84 @@ describe("mount", () => {
     expect(pressed.dataset.mode).toBe("normal");
   });
 
+  // Finding 1: nothing on the roll path used to clear model.editingInit.
+  // `allowed` (canRoll && !rolling) made the editor disappear the instant the
+  // row went "rolling", but editingInit itself stayed set underneath — so
+  // the moment the status handler deleted the "rolling" entry on success,
+  // `allowed` flipped back true and the stale editingInit reopened an
+  // unfocused editor prefilled with the value the roll just wrote. Both
+  // assertions matter: the first catches a fix that only clears editingInit
+  // once the roll settles (too late — the finding is specifically that the
+  // editor must not survive the "rolling" transition either), the second
+  // catches a fix that clears it on the "rolling" transition but never
+  // checked it again by the time "ok" arrives.
+  it("does not reopen the initiative editor after a roll completes on the edited row", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    expect(root.querySelector(".fh-init-edit")).not.toBeNull();
+
+    root.querySelector<HTMLButtonElement>(".fh-roll")!.click();
+    // requestRolls marks the row "rolling" and re-renders synchronously —
+    // the editor must be gone right away, not just hidden behind `allowed`.
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+
+    await OBR.broadcast.sendMessage(
+      INTERNAL_STATUS_CHANNEL,
+      { itemId: "grieg", state: "ok" },
+      { destination: "LOCAL" },
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Before the fix, deleting the "rolling" status here flipped `allowed`
+    // back to true and the untouched editingInit reopened the editor.
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  // Scope check for the same fix: a bulk roll must close the editor only on
+  // rows it actually rolls. "excluded" is already-rolled (init !== 0), so
+  // pendingBulkRolls leaves it out of the batch — its open editor must
+  // survive both the click that starts the bulk roll and the "ok" that
+  // later lands for the row that *was* included.
+  it("keeps an editor open on a row a bulk roll does not include", async () => {
+    __testHooks.setRole("GM");
+    __testHooks.setSelf("gm-1");
+    __testHooks.setItems([
+      token("included", "gm-1", 0),
+      token("excluded", "gm-1", 15),
+    ]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>('.fh-init[data-id="excluded"]')!.click();
+    const editor = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(editor.dataset.id).toBe("excluded");
+
+    root.querySelector<HTMLButtonElement>("#fh-bulk")!.click();
+    const req = __testHooks.broadcasts.find((b) => b.channel === INTERNAL_ROLL_CHANNEL)!;
+    expect(
+      (req.data as { rolls: Array<{ itemId: string }> }).rolls.map((r) => r.itemId),
+    ).toEqual(["included"]);
+
+    const stillOpen = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(stillOpen).not.toBeNull();
+    expect(stillOpen.dataset.id).toBe("excluded");
+
+    await OBR.broadcast.sendMessage(
+      INTERNAL_STATUS_CHANNEL,
+      { itemId: "included", state: "ok" },
+      { destination: "LOCAL" },
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    const afterStatus = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(afterStatus).not.toBeNull();
+    expect(afterStatus.dataset.id).toBe("excluded");
+  });
+
   it("re-renders when a token's initiative changes", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");

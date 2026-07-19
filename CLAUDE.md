@@ -104,6 +104,21 @@ be open.
   independently refuses to render an editor for a row whose `allowed` is
   false. Both are needed: without the handler-side check, a row the viewer
   cannot touch would enter edit mode with no editor rendered to close it.
+- **A roll discards, not commits, an editor open on the row it rolls.**
+  `requestRolls` closes `editingInit` for any row in its own batch — scoped
+  to that batch's itemIds, not "any open editor", so a bulk roll never
+  touches an editor open on an untouched row. Discard rather than commit:
+  the roll is about to overwrite the same `init` key regardless, and
+  committing here would race that write. Closes via
+  `closeInitEditor("keyboard")`, not `"blur"` — this close is never the tail
+  of a mousedown/click pair still in flight, and gating it on
+  `pointerDownInFlight` would risk suppressing the render over some
+  unrelated pointer interaction elsewhere in the panel, stranding the editor
+  on a row Forge is about to overwrite. The `INTERNAL_STATUS_CHANNEL`
+  handler needs no matching check: this clear plus `handleClick`'s existing
+  refusal to open an editor on an already-`"rolling"` row keep `editingInit`
+  and a `"rolling"` status mutually exclusive for any roll this popover
+  instance itself started.
 - **`pointerDownInFlight` guards `closeInitEditor` specifically — it does not
   make renders in general safe during a pointer interaction.** `renderList`
   rebuilds all of `root` via `innerHTML`. A synchronous re-render triggered

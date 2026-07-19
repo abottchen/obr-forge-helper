@@ -110,6 +110,20 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // Advantage is situational; never let it carry into the next round.
       model.modes.set(r.itemId, "normal");
     }
+    // A row about to roll is about to have its `init` overwritten regardless
+    // of anything sitting in an open editor on it, so discard rather than
+    // commit — committing here would race the roll's own write to the same
+    // key. Scoped to this batch's own itemIds (not "any open editor") so a
+    // bulk roll on rows B/C/D never touches an editor open on untouched row
+    // A: editingInit only ever names one row, so at most one of these
+    // matches. "keyboard" because this close is never the tail of a
+    // mousedown/click pair still in flight — handleClick runs after mouseup
+    // has already cleared pointerDownInFlight (see its own comment above),
+    // so the "blur" reason's gate would never fire here anyway, and asking
+    // for it would misdescribe why this call is safe to render immediately.
+    if (model.editingInit !== null && rolls.some((r) => r.itemId === model.editingInit)) {
+      closeInitEditor("keyboard");
+    }
     renderList(root, model);
     void OBR.broadcast
       .sendMessage(INTERNAL_ROLL_CHANNEL, { rolls }, { destination: "LOCAL" })
@@ -464,6 +478,20 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     if (!msg?.itemId) return;
     if (msg.state === "ok") model.statuses.delete(msg.itemId);
     else model.statuses.set(msg.itemId, msg);
+    // No editingInit handling needed here (see Finding 1 in the manual init
+    // entry work): requestRolls already discards an editor open on a row the
+    // instant *this* popover requests a roll on it, and handleClick refuses
+    // to open a new editor on a row already marked "rolling". Together those
+    // two make editingInit and a "rolling" status mutually exclusive for any
+    // roll this popover instance itself kicked off, so by the time a status
+    // update lands here — "rolling", "ok", or "error" — editingInit can
+    // never still name that row. (A status for a roll requested by a
+    // now-gone popover instance, from dicex's OBR.action.open() unmounting
+    // and remounting ours around every roll, is a theoretical gap in that
+    // invariant — but it needs a fresh model to have opened an editor on a
+    // row it never itself observed as rolling, and nothing in this test
+    // harness can drive that; left undefended rather than adding a branch
+    // with no way to prove it does anything.)
     renderList(root, model);
   });
 
