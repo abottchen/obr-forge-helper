@@ -50,14 +50,22 @@ export async function readRoster(gmId: string | null): Promise<Combatant[]> {
 }
 
 /**
- * The only Forge key we ever write. Clamped to 1 because Forge reads 0 as
- * "unrolled": a natural 1 with a negative modifier would otherwise be swept
- * into the next bulk roll and overwrite itself. dicex has already logged the
- * true total by this point, so the roll record stays honest.
+ * Write Forge's `init` verbatim. 0 is Forge's "unrolled", so this is the
+ * entry point for manual entry, which needs to be able to clear a value.
+ * Roll results go through writeInit() instead.
  */
-export async function writeInit(itemId: string, total: number): Promise<void> {
-  const value = Math.max(1, total);
+export async function setInit(itemId: string, value: number): Promise<void> {
   await OBR.scene.items.updateItems([itemId], (drafts: ForgeItem[]) => {
     for (const d of drafts) d.metadata[F_INIT] = value;
   });
+}
+
+/**
+ * The roll path. Clamped to 1 because Forge reads 0 as "unrolled": a natural
+ * 1 with a negative modifier would otherwise be swept into the next bulk roll
+ * and overwrite itself. dicex has already logged the true total by this
+ * point, so the roll record stays honest.
+ */
+export async function writeInit(itemId: string, total: number): Promise<void> {
+  await setInit(itemId, Math.max(1, total));
 }

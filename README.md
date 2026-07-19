@@ -4,7 +4,9 @@ An Owlbear Rodeo extension that makes entering initiative in
 [Forge](https://extensions.owlbear.rodeo/) painless: every combatant gets a row
 with an editable bonus, an advantage toggle, and one Roll button. Rolls run on
 real 3D dice through [dicex](https://github.com/abottchen/dicex), and the result
-is written straight into Forge's own initiative list.
+is written straight into Forge's own initiative list. A combatant's own
+initiative badge is also editable directly — click it, type a number, and
+press Enter to write it straight to Forge without rolling.
 
 ## Install
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { OBR, __testHooks } from "./_mocks/obr-sdk";
-import { combatantName, readRoster, writeInit } from "../src/forge";
+import { combatantName, readRoster, writeInit, setInit } from "../src/forge";
 import { F_ON_LIST, F_INIT, F_NAME, F_DEX } from "../src/constants";
 
 function token(over: {
@@ -127,5 +127,44 @@ describe("writeInit", () => {
     await writeInit("a", 12);
     expect(__testHooks.getItem("b")!.metadata[F_INIT]).toBe(5);
     expect(OBR.scene.items.updateItems).toHaveBeenCalledWith(["a"], expect.any(Function));
+  });
+});
+
+describe("setInit", () => {
+  beforeEach(() => __testHooks.reset());
+
+  it("writes the value as given", async () => {
+    __testHooks.setItems([token({ id: "a", onList: true })]);
+    await setInit("a", 17);
+    expect(__testHooks.getItem("a")!.metadata[F_INIT]).toBe(17);
+  });
+
+  // The whole reason this is split out of writeInit: 0 is Forge's "unrolled",
+  // and manual entry needs to be able to say it.
+  it("writes a literal 0 without clamping", async () => {
+    __testHooks.setItems([token({ id: "a", onList: true, init: 12 })]);
+    await setInit("a", 0);
+    expect(__testHooks.getItem("a")!.metadata[F_INIT]).toBe(0);
+  });
+
+  it("preserves the rest of the stat block", async () => {
+    __testHooks.setItems([
+      token({ id: "a", onList: true, forgeName: "Goblin", dex: "14" }),
+    ]);
+    await setInit("a", 9);
+    const md = __testHooks.getItem("a")!.metadata;
+    expect(md[F_NAME]).toBe("Goblin");
+    expect(md[F_DEX]).toBe("14");
+    expect(md[F_ON_LIST]).toBe(true);
+    expect(md[F_INIT]).toBe(9);
+  });
+
+  it("targets only the named item", async () => {
+    __testHooks.setItems([
+      token({ id: "a", onList: true }),
+      token({ id: "b", onList: true, init: 5 }),
+    ]);
+    await setInit("a", 0);
+    expect(__testHooks.getItem("b")!.metadata[F_INIT]).toBe(5);
   });
 });
