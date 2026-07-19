@@ -85,13 +85,20 @@ be open.
   it considers the value modified, so a commit path that waited on `change`
   would silently write nothing when a reopened badge is retyped with the
   number it already showed. `commitInit` (called from both `handleKeyDown`
-  and `handleChange`) guards itself by checking `model.editingInit` still
-  names the row before writing. An ordinary Enter never needs that guard —
-  its own re-render detaches the input before the trailing `change`/
-  `focusout` can reach a handler — but a mousedown that holds
-  `pointerDownInFlight` true (below) can leave the same editor attached and
-  focused for a second Enter to reach `commitInit` again, and that guard is
-  what stops the second write.
+  and `handleChange`) takes the `CloseReason` it was invoked under (below)
+  and threads it through every `closeInitEditor` call it makes, so an
+  Enter-driven commit (`"keyboard"`) always closes immediately and a
+  `change`-driven one (`"blur"`) stays subject to the `pointerDownInFlight`
+  gate — this is why the reject paths (bad input, permission lost since the
+  editor opened) close on Enter too instead of only self-healing on success.
+  `commitInit` also guards itself by checking `model.editingInit` still names
+  the row before writing. An ordinary Enter never needs that guard — its own
+  immediate close detaches the input before any trailing event can reach a
+  handler — but a `change`-driven commit reached while `pointerDownInFlight`
+  is true stays gated and leaves the same editor attached and focused, and
+  that guard is what stops a second commit-triggering event (another
+  `change`, or an Enter reaching it before the mouse button is released)
+  from writing a second time.
 - **The init badge renders on every row, editable or not.** The permission
   check lives in the click handler in `main.ts`, and `renderRow`
   independently refuses to render an editor for a row whose `allowed` is
@@ -106,18 +113,27 @@ be open.
   from one open editor onto another row's badge did nothing but close the
   first. The flag is set on `mousedown` on `root`; while it is true,
   `closeInitEditor("blur")` clears state without rendering, leaving the DOM
-  intact so the click still lands. `closeInitEditor("escape")` never checks
-  the flag — losing the click an Escape keypress is itself part of is
-  harmless, since nothing depends on that click landing anywhere. Every early
-  return in `handleClick`'s `.fh-init` branch that can observe a stale editor
-  calls `repaintStaleEditor()` first, and a click matching no branch at all
-  falls into the same repaint at the end of `handleClick`. The flag is
-  cleared on both `mouseup` and `dragend` (a native drag stops mouse events
-  entirely), both registered on **`window`**, not `root`, because the
-  release — or the drag grabbing the pointer — can happen outside the panel;
-  an earlier version cleared it only in `handleClick` and could wedge true
-  for the rest of the session, after which Escape stopped visibly closing the
-  editor. This reduces the click-swallow class, it does not eliminate it:
+  intact so the click still lands. `closeInitEditor("keyboard")` — Escape's
+  reason, and the one `commitInit` uses for an Enter-driven commit too (see
+  the "Enter commits a manual init edit" gotcha above) — never checks the
+  flag. Losing the click that keypress is itself part of is harmless in the
+  common case: the mousedown that set the flag is almost always on the very
+  editor being closed, whose pending click had nowhere else to go. (A drag
+  that leaves the editor before the key lands could in principle still strand
+  a click meant for another control — accepted as a rare edge case rather
+  than worth gating Escape/Enter on the flag too.) Every early return in
+  `handleClick`'s `.fh-init` branch that can observe a stale editor calls
+  `repaintStaleEditor()` first, and a click matching no branch at all falls
+  into the same repaint at the end of `handleClick`. The flag is cleared on
+  both `mouseup` and `dragend` (a
+  native drag stops mouse events entirely), both registered on **`window`**,
+  not `root`, because the release — or the drag grabbing the pointer — can
+  happen outside the panel; an earlier version cleared it only in
+  `handleClick` and could wedge true for the rest of the session, after which
+  any blur-family close — an ordinary click-away, or a modified edit
+  committed via `change` — stopped visibly closing the editor, though Escape
+  and Enter kept working since neither ever checked the flag. This reduces
+  the click-swallow class, it does not eliminate it:
   `handleChange`'s non-numeric-rejection path and `refresh()` both call
   `renderList` with no flag check at all, so a `mousedown`→`click` window
   landing across either of those can still swallow a click. Fixing that
