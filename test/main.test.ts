@@ -365,13 +365,16 @@ describe("mount", () => {
   });
 
   // Finding 1's zombie-editor bug (a suppressed closeInitEditor leaving
-  // model.editingInit null but the old input still attached) has two
-  // call sites inside the .fh-init branch's early returns, plus the
-  // no-branch-matched fallback at the end of handleClick. The test above
-  // covers the permission check with a plain click; "does not leave a stale
-  // editor..." below covers the fallback. This one drives the race that
-  // actually lands on the permission-check early return itself, so all
-  // three repaintStaleEditor() call sites have direct coverage.
+  // model.editingInit null but the old input still attached) has three
+  // repaintStaleEditor() call sites: the two early returns inside the
+  // .fh-init branch (permission, then rolling), plus the no-branch-matched
+  // fallback at the end of handleClick. The test above covers the
+  // permission check with a plain click; "does not leave a stale editor..."
+  // below covers the fallback. This one drives the race that actually lands
+  // on the permission-check early return itself; "...when the next click
+  // lands on a row that started rolling..." below drives it onto the rolling
+  // early return. Together the three give all three call sites direct
+  // coverage.
   it("repaints a stale editor left by a suppressed close when the next click is denied by the permission check", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
@@ -400,6 +403,57 @@ describe("mount", () => {
     editor.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     forbidden.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  // See the comment above: this one drives the mousedown -> focusout ->
+  // mouseup -> click race onto the *rolling* early return specifically — a
+  // row the player owns (so it clears the permission check) but that started
+  // rolling after the editor on a different row was already open. The badge
+  // itself always renders regardless of rolling state (see ui-list.ts's
+  // renderRow), and nothing sets pointer-events: none on it, so a click
+  // reaching it mid-roll is a real, reachable path, not a theoretical one.
+  it("repaints a stale editor left by a suppressed close when the next click lands on a row that started rolling while an editor was open elsewhere", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([
+      token("mine", "p-1", 12),
+      token("other", "p-1", 8),
+    ]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>('.fh-init[data-id="mine"]')!.click();
+    const editor = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(editor.dataset.id).toBe("mine");
+
+    // Same pattern as "marks a row as rolling when the background reports
+    // status" above. Its own renderList call redraws the whole panel, so
+    // reacquire the editor afterward and confirm it survived (renderList
+    // restores focus for the still-open "mine" row) before trusting what
+    // follows.
+    await OBR.broadcast.sendMessage(
+      INTERNAL_STATUS_CHANNEL,
+      { itemId: "other", state: "rolling" },
+      { destination: "LOCAL" },
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    const editorAfterStatus = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(editorAfterStatus.dataset.id).toBe("mine");
+
+    const rollingBadge = root.querySelector<HTMLElement>('.fh-init[data-id="other"]')!;
+
+    // Real browser order: mousedown blurs the open "mine" editor, firing
+    // focusout and suppressing closeInitEditor's render (pointerDownInFlight
+    // is true) — model.editingInit is null but the "mine" input is still
+    // attached by the time the click lands on "other"'s badge. "other" is
+    // the player's own token, so it clears the permission check, but it is
+    // rolling, reaching the rolling early return itself.
+    rollingBadge.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    editorAfterStatus.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    rollingBadge.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(root.querySelector(".fh-init-edit")).toBeNull();
   });
