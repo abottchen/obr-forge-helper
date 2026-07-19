@@ -427,8 +427,11 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   // out of the init editor), the browser stops dispatching mouse events
   // altogether and fires `dragend` instead of `mouseup` on release. Without
   // this, that sequence would wedge the flag true exactly like the
-  // drag-off-panel case handlePointerUp itself guards against. Not
-  // reproducible in jsdom, so unlike handlePointerUp this has no test.
+  // drag-off-panel case handlePointerUp itself guards against. The native
+  // drag that triggers this in practice isn't reproducible in jsdom, but the
+  // listener wiring and flag clear are — see the mousedown -> dragend ->
+  // focusout test in main.test.ts, which uses the same synthetic-dispatch
+  // technique as handlePointerUp's own wedge test.
   const handleDragEnd = (): void => {
     pointerDownInFlight = false;
   };

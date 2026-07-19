@@ -538,10 +538,46 @@ describe("mount", () => {
     input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
 
-    // With the flag still (wrongly) true, Escape's closeInitEditor() call
-    // would clear model.editingInit but skip the render, leaving the stale
-    // editor sitting in the DOM forever.
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    // Reveal whether the flag actually cleared via a blur-family close, not
+    // Escape: closeInitEditor("keyboard") (Escape's and Enter's reason) never
+    // checks pointerDownInFlight at all, so it renders regardless of whether
+    // the flag is stuck and would pass this test even with handlePointerUp
+    // deleted, proving nothing about the listener under test. `focusout`
+    // uses closeInitEditor("blur"), which does check the flag: with the flag
+    // still (wrongly) true, its call would clear model.editingInit but skip
+    // the render, leaving the stale editor sitting in the DOM forever.
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+  });
+
+  // handlePointerUp's mouseup listener only catches releases; it never fires
+  // once a native drag has actually started (e.g. dragging selected text out
+  // of the box), because the browser stops dispatching mouse events entirely
+  // for the rest of that gesture and fires `dragend` on release instead. The
+  // native drag itself isn't reproducible in jsdom, but the fix is just
+  // another window-scoped listener plus the same flag clear, and that much
+  // is testable with the same synthetic-dispatch technique as the mouseup
+  // wedge test above.
+  it("does not wedge the editor open forever when a mousedown is followed by dragend instead of mouseup", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(input).not.toBeNull();
+
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    window.dispatchEvent(new Event("dragend"));
+
+    // Same discriminator as the mouseup version above: `focusout` closes via
+    // closeInitEditor("blur"), which does check the flag, so this only
+    // passes if dragend actually cleared it.
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     await new Promise((r) => setTimeout(r, 0));
 
     expect(root.querySelector(".fh-init-edit")).toBeNull();
