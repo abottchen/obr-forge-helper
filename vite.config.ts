@@ -13,5 +13,5 @@ export default defineConfig({
     },
   },
   server: { cors: { origin: "https://www.owlbear.rodeo" } },
-  test: { globals: true, environment: "jsdom" },
+  test: { globals: true, environment: "jsdom", clearMocks: true },
 });

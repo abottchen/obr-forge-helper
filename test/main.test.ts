@@ -527,13 +527,17 @@ describe("mount", () => {
     badge.click();
     const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
     expect(input.value).toBe("12"); // untouched
+
+    // Clear the mock *after* the setup click above (mount()/click() call no
+    // scene-item methods, but this keeps the assertion below honest even if
+    // that ever changes) and *before* the retype, so the call count below
+    // can only be satisfied by the Enter this test is actually about.
+    OBR.scene.items.updateItems.mockClear();
+    input.value = "12"; // retyped, unchanged from what the box already held
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await new Promise((r) => setTimeout(r, 0));
 
-    expect(OBR.scene.items.updateItems).toHaveBeenCalledWith(
-      ["grieg"],
-      expect.any(Function),
-    );
+    expect(OBR.scene.items.updateItems).toHaveBeenCalledTimes(1);
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
   });
 
