@@ -111,6 +111,21 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       .catch((e) => console.warn("[forge-helper] roll request failed", e));
   }
 
+  // Repaints a stale `.fh-init-edit` left in the DOM by a closeInitEditor()
+  // call that skipped its render because pointerDownInFlight was true (see
+  // its declaration above): model.editingInit is already null, but the old
+  // editor node is still attached, focused, and accepting keystrokes that go
+  // nowhere. Every place in handleClick that can observe that state — every
+  // early return in the `.fh-init` branch, and the catch-all at the very end
+  // for a click that matched no branch at all — must call this before
+  // giving up, or the zombie editor lingers until some unrelated render
+  // happens to clear it.
+  function repaintStaleEditor(): void {
+    if (model.editingInit === null && root.querySelector(".fh-init-edit")) {
+      renderList(root, model);
+    }
+  }
+
   const handleClick = (ev: MouseEvent): void => {
     // pointerDownInFlight is not cleared here. It no longer needs to be:
     // mouseup always fires before click in the browser's native order, so
@@ -127,8 +142,14 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // check lives here rather than in the selector. Without it, a row the
       // viewer cannot touch would enter an edit mode that renders no editor
       // and has nothing to close it.
-      if (!c || !canRoll(c, session.selfId, session.isGm)) return;
-      if (model.statuses.get(id)?.state === "rolling") return;
+      if (!c || !canRoll(c, session.selfId, session.isGm)) {
+        repaintStaleEditor();
+        return;
+      }
+      if (model.statuses.get(id)?.state === "rolling") {
+        repaintStaleEditor();
+        return;
+      }
       model.editingInit = id;
       renderList(root, model);
       // Nothing was focused before this render, so renderList's restoration
@@ -178,10 +199,8 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     // render earlier in this same interaction — see closeInitEditor —
     // model.editingInit is already null but the old .fh-init-edit is still
     // sitting in the DOM, e.g. this click landed on empty space inside the
-    // panel rather than another badge. Render once so it cannot linger.
-    if (model.editingInit === null && root.querySelector(".fh-init-edit")) {
-      renderList(root, model);
-    }
+    // panel rather than another badge. Repaint so it cannot linger.
+    repaintStaleEditor();
   };
 
   const handleChange = (ev: Event): void => {
@@ -246,10 +265,27 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       });
   };
 
-  function closeInitEditor(): void {
+  /**
+   * Why the editor is closing. Controls whether the render this call would
+   * otherwise trigger is suppressed while a pointer interaction is in
+   * flight — see the `pointerDownInFlight` gate below.
+   *
+   * - `"blur"`: a `focusout`, or the `change`/commit that precedes one. Both
+   *   can land between a `mousedown` and the `click` it precedes, so they
+   *   must respect the gate — see pointerDownInFlight's declaration above.
+   * - `"escape"`: the user pressed Escape. Escape is not part of any
+   *   mousedown/click pair, so it never needs to wait: the flag being true
+   *   only means a mouse button happens to be down somewhere, and rendering
+   *   right away can at worst swallow a click that was going to land on the
+   *   very editor this Escape is closing — which is not a click anyone was
+   *   depending on landing anywhere else.
+   */
+  type CloseReason = "blur" | "escape";
+
+  function closeInitEditor(reason: CloseReason): void {
     if (model.editingInit === null) return;
     model.editingInit = null;
-    if (pointerDownInFlight) {
+    if (reason === "blur" && pointerDownInFlight) {
       // A mousedown just landed inside the panel and its native click has
       // not fired yet (see pointerDownInFlight's declaration). Rendering now
       // would replace every node under root, including whichever one the
@@ -278,8 +314,9 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // editor opened (e.g. the combatant left the roster) — nothing to
       // write, but the editor must still close. Nothing else will: no
       // further keydown, change, or focusout is coming for a control the
-      // next render won't draw.
-      closeInitEditor();
+      // next render won't draw. Not an Escape, so it stays subject to the
+      // pointerDownInFlight gate like any other blur-family close.
+      closeInitEditor("blur");
       return;
     }
 
@@ -293,7 +330,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       if (!Number.isFinite(parsed)) {
         // Number("3x") is NaN. Reject outright rather than writing a bogus
         // 0 — closing re-renders the badge from the stored value.
-        closeInitEditor();
+        closeInitEditor("blur");
         return;
       }
       const truncated = Math.trunc(parsed);
@@ -307,10 +344,15 @@ export async function mount(root: HTMLElement): Promise<() => void> {
       // check and write -0 — Forge reads that as unrolled, same as 0. Do
       // not "simplify" this to Math.max(1, truncated) either — that clamps
       // the legitimate 0-means-clear case up to 1 and breaks clearing.
+      //
+      // A literal "-0" typed by the user takes this same non-negative path
+      // for the same reason (Number("-0") is -0, and -0 < 0 is false), so it
+      // writes -0 — numerically zero, so it clears exactly like "0" does.
+      // That is consistent with 0-means-clear and deliberate, not a gap.
       value = parsed < 0 ? 1 : truncated;
     }
 
-    closeInitEditor();
+    closeInitEditor("blur");
     void setInit(id, value).catch((e) =>
       console.warn("[forge-helper] init write failed", e),
     );
@@ -321,7 +363,12 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     if (!input) return;
     if (ev.key === "Escape") {
       ev.preventDefault();
-      closeInitEditor();
+      // Never gated by pointerDownInFlight — see CloseReason above. Without
+      // this, Escape pressed while the mouse button is still down (e.g. a
+      // text-selection drag started inside the box) would clear
+      // model.editingInit but skip the render, leaving the box attached and
+      // focused, silently swallowing whatever the user typed next.
+      closeInitEditor("escape");
     }
     if (ev.key === "Enter") {
       // Handled here rather than via `change`, which the browser skips when
@@ -336,7 +383,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
   // editingInit, so this finds nothing left to do — see handleChange.
   const handleFocusOut = (ev: FocusEvent): void => {
     if (!(ev.target as HTMLElement).closest(".fh-init-edit")) return;
-    closeInitEditor();
+    closeInitEditor("blur");
   };
 
   // Marks a pointer interaction as in flight for closeInitEditor — see
@@ -359,12 +406,24 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     pointerDownInFlight = false;
   };
 
+  // Clears pointerDownInFlight through a different hole in the mouseup
+  // guarantee above: once a native drag starts (e.g. dragging selected text
+  // out of the init editor), the browser stops dispatching mouse events
+  // altogether and fires `dragend` instead of `mouseup` on release. Without
+  // this, that sequence would wedge the flag true exactly like the
+  // drag-off-panel case handlePointerUp itself guards against. Not
+  // reproducible in jsdom, so unlike handlePointerUp this has no test.
+  const handleDragEnd = (): void => {
+    pointerDownInFlight = false;
+  };
+
   root.addEventListener("click", handleClick);
   root.addEventListener("change", handleChange);
   root.addEventListener("keydown", handleKeyDown);
   root.addEventListener("focusout", handleFocusOut);
   root.addEventListener("mousedown", handlePointerDown);
   window.addEventListener("mouseup", handlePointerUp);
+  window.addEventListener("dragend", handleDragEnd);
 
   const unsubItems = OBR.scene.items.onChange(() => {
     void refresh();
@@ -404,6 +463,7 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     root.removeEventListener("focusout", handleFocusOut);
     root.removeEventListener("mousedown", handlePointerDown);
     window.removeEventListener("mouseup", handlePointerUp);
+    window.removeEventListener("dragend", handleDragEnd);
     unsubItems();
     unsubRoom();
     unsubParty();

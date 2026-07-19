@@ -359,6 +359,41 @@ describe("mount", () => {
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
   });
 
+  // Escape must close immediately even while the mouse button is still
+  // down (e.g. mid text-selection drag inside the box): unlike a
+  // blur-family close (focusout, or the change a commit fires), Escape is
+  // not part of a mousedown/click pair racing against a re-render, so it
+  // must not wait for pointerDownInFlight to clear. Before this fix,
+  // closeInitEditor had no notion of *why* it was closing and suppressed
+  // every render while the flag was true, including Escape's — leaving the
+  // box attached, focused, and silently discarding whatever was typed next.
+  it("closes the editor on Escape immediately, even while the mouse button is still held down", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    root.querySelector<HTMLElement>(".fh-init")!.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = "20";
+
+    // Mouse button goes down inside the editor (starting a text-selection
+    // drag) and stays down — no mouseup yet — while Escape is pressed.
+    input.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+
+    // The editor must be gone right away, without waiting for the mouseup
+    // that finally releases the held button below.
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+    expect(root.querySelector(".fh-init")!.textContent).toBe("12");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
+  });
+
   it("opens row B's editor when clicking from row A's open editor onto row B's badge, in real mousedown-before-click order", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
