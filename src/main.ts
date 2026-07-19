@@ -10,7 +10,7 @@ import type {
   Combatant,
 } from "./types";
 import { injectStyles, BASE_CSS } from "./styles";
-import { readRoster } from "./forge";
+import { readRoster, setInit } from "./forge";
 import { resolveSession, type Session } from "./session";
 import { buildRosterView, canRoll } from "./roster";
 import { readOverrides, writeOverride, pruneOverrides, resolveBonus } from "./bonus";
@@ -252,12 +252,57 @@ export async function mount(root: HTMLElement): Promise<() => void> {
     renderList(root, model);
   }
 
+  /**
+   * Parse, clamp, write, close.
+   *
+   * The editingInit check at the top is what makes this idempotent. Enter
+   * commits and closes the editor, and the `change` and `focusout` that
+   * follow the resulting blur would otherwise each try to commit again.
+   */
+  function commitInit(input: HTMLInputElement): void {
+    const id = input.dataset.id;
+    if (id === undefined || model.editingInit !== id) return;
+    const c = combatants.find((x) => x.id === id);
+    if (!c || !canRoll(c, session.selfId, session.isGm)) return;
+
+    const raw = input.value.trim();
+    let value: number;
+    if (raw === "") {
+      // An emptied box means "unrolled", and 0 is how Forge spells that.
+      value = 0;
+    } else {
+      const parsed = Number(raw);
+      if (!Number.isFinite(parsed)) {
+        // Number("3x") is NaN. Reject outright rather than writing a bogus
+        // 0 — closing re-renders the badge from the stored value.
+        closeInitEditor();
+        return;
+      }
+      const truncated = Math.trunc(parsed);
+      // 0 clears. A negative is a value the user meant, so it gets the roll
+      // path's floor of 1 instead: written through, it would read as
+      // unrolled and be swept into the next bulk roll.
+      value = truncated < 0 ? 1 : truncated;
+    }
+
+    closeInitEditor();
+    void setInit(id, value).catch((e) =>
+      console.warn("[forge-helper] init write failed", e),
+    );
+  }
+
   const handleKeyDown = (ev: KeyboardEvent): void => {
     const input = (ev.target as HTMLElement).closest<HTMLInputElement>(".fh-init-edit");
     if (!input) return;
     if (ev.key === "Escape") {
       ev.preventDefault();
       closeInitEditor();
+    }
+    if (ev.key === "Enter") {
+      // Handled here rather than via `change`, which the browser skips when
+      // it considers the value unmodified. Enter always commits.
+      ev.preventDefault();
+      commitInit(input);
     }
   };
 

@@ -30,6 +30,18 @@ describe("mount", () => {
     document.body.appendChild(root);
   });
 
+  async function editInit(id: string, value: string): Promise<HTMLInputElement> {
+    const badge = Array.from(root.querySelectorAll<HTMLElement>(".fh-init")).find(
+      (b) => b.dataset.id === id,
+    )!;
+    badge.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    input.value = value;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+    return input;
+  }
+
   it("renders the roster for a player, hiding GM tokens", async () => {
     __testHooks.setRole("PLAYER");
     __testHooks.setSelf("p-1");
@@ -374,6 +386,9 @@ describe("mount", () => {
     // reproduces the race this guards against.
     rowB.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     rowA.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    // mouseup always precedes click in the browser's native order (see
+    // handlePointerUp) and clears pointerDownInFlight before click fires.
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     rowB.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     const editors = root.querySelectorAll<HTMLInputElement>(".fh-init-edit");
@@ -397,6 +412,9 @@ describe("mount", () => {
 
     nameEl.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     rowA.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    // mouseup always precedes click in the browser's native order (see
+    // handlePointerUp) and clears pointerDownInFlight before click fires.
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
     nameEl.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(root.querySelector(".fh-init-edit")).toBeNull();
@@ -445,6 +463,126 @@ describe("mount", () => {
 
     expect(root.querySelector(".fh-init-edit")).toBeNull();
     expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
+  });
+
+  it("writes the typed initiative to Forge on Enter alone", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+
+    await editInit("grieg", "18");
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(18);
+    expect(root.querySelector(".fh-init-edit")).toBeNull();
+    expect(root.querySelector(".fh-init")!.textContent).toBe("18");
+  });
+
+  // The whole point of handling Enter directly instead of relying on `change`:
+  // the browser fires no change event when the value was never modified.
+  it("writes even when the typed value matches what the box already held", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 12)]);
+    await mount(root);
+
+    const badge = root.querySelector<HTMLElement>(".fh-init")!;
+    badge.click();
+    const input = root.querySelector<HTMLInputElement>(".fh-init-edit")!;
+    expect(input.value).toBe("12"); // untouched
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(OBR.scene.items.updateItems).toHaveBeenCalledWith(
+      ["grieg"],
+      expect.any(Function),
+    );
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(12);
+  });
+
+  it("clears the initiative back to unrolled when the box is emptied", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await mount(root);
+
+    await editInit("grieg", "");
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(0);
+    expect(root.querySelector(".fh-init")!.textContent).toBe("—");
+  });
+
+  it("treats a typed 0 as a clear", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await mount(root);
+
+    await editInit("grieg", "0");
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(0);
+  });
+
+  // A negative is a value the user meant, not a clear. Written through it
+  // would read as unrolled and be swept into the next bulk roll, so it gets
+  // the same floor of 1 the roll path applies.
+  it("clamps a negative initiative to 1", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await mount(root);
+
+    await editInit("grieg", "-3");
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(1);
+  });
+
+  it("truncates a fractional initiative", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+
+    await editInit("grieg", "13.7");
+
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(13);
+  });
+
+  it("rejects a non-numeric initiative, leaving the stored value alone", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 18)]);
+    await mount(root);
+
+    await editInit("grieg", "3x");
+
+    // Number("3x") is NaN — must not fall through to a bogus 0.
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(18);
+    expect(root.querySelector(".fh-init")!.textContent).toBe("18");
+  });
+
+  it("writes once when Enter is followed by the blur it causes", async () => {
+    __testHooks.setRole("PLAYER");
+    __testHooks.setSelf("p-1");
+    __testHooks.setParty([{ id: "gm-1", name: "Adam", role: "GM" }]);
+    __testHooks.setItems([token("grieg", "p-1", 0)]);
+    await mount(root);
+
+    const input = await editInit("grieg", "18");
+    OBR.scene.items.updateItems.mockClear();
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(OBR.scene.items.updateItems).not.toHaveBeenCalled();
+    expect(__testHooks.getItem("grieg")!.metadata[F_INIT]).toBe(18);
   });
 
   it("keeps a newer draft when an older write for the same field resolves after it", async () => {
